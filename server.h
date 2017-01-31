@@ -1,3 +1,10 @@
+#ifndef C10M_SERVER__HTTP_H_
+#define C10M_SERVER__HTTP_H_
+
+#ifdef __cplusplus
+namespace c10m_server {
+#endif
+
 
 // primitive types
 typedef enum server_state_enum {
@@ -21,3 +28,14 @@ struct server_http_request {
 server_state_e server_http_process_request(int connector_fd, struct server_http_request *request);
 
 server_state_e server_http_process_response(int connector_fd, const struct server_http_request *request);
+
+
+#ifdef __cplusplus
+}
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // C10M_SERVER__HTTP_H_

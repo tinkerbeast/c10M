@@ -1,3 +1,11 @@
+#ifndef C10M_WORKER__HANDLER_H_
+#define C10M_WORKER__HANDLER_H_
+
+
+#ifdef __cplusplus
+namespace c10m_worker {
+#endif
+
 
 // primitive types
 
@@ -22,6 +30,9 @@ struct handler_lifecycle {
 
 // inlines
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 // prototypes
 
 // externs
@@ -29,3 +40,14 @@ struct handler_lifecycle {
 extern struct handler_lifecycle handler_uniprocess;
 
 extern struct handler_lifecycle handler_fork;
+
+#ifdef __cplusplus
+}
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // C10M_WORKER__HANDLER_H_
+

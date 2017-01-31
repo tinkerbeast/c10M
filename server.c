@@ -8,6 +8,7 @@
 // local
 #include "server.h"
 
+#define SERVER_TRACE 1
 
 static char* default_request_response = 
 "HTTP/1.0 200 OK\n"
@@ -102,6 +103,11 @@ server_state_e server_http_process_request(int connector_fd, struct server_http_
         return SERVER_CLIENT_CLOSED;
     } else if (req_len == -1) {
         return SERVER_CLIENT_ERROR;
+    }
+
+    if (SERVER_TRACE) {
+        req_str[1024 -1] = '\0';
+        printf("%s", req_str);
     }
 
     // TODO: Actually process the request

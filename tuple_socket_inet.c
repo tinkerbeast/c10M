@@ -12,11 +12,9 @@
 #include <string.h>
 // local
 
-#include "tuple_socket_inet.h"
+#include "tuple.h"
 
 
-// the port users will be connecting to
-#define PORT "4321"  
 
 
 
@@ -44,7 +42,7 @@ char *tuple_sockaddr_str(struct sockaddr *sa, char* dst, size_t dst_size)
 }
 
 
-int tuple_inetsock_create(int *server_socket)
+int tuple_inetsock_create(int *server_socket, const char *node, const char* service)
 {
     int rc = -1;
     const int yes = 1;
@@ -55,6 +53,8 @@ int tuple_inetsock_create(int *server_socket)
     struct addrinfo server_addr;
     struct addrinfo server_addr_hints;
     struct addrinfo *result_list = NULL;
+
+    (void)node;
     
 
     // tuple info creation - hint for `protocol`, dst side
@@ -66,7 +66,7 @@ int tuple_inetsock_create(int *server_socket)
     server_addr_hints.ai_protocol = 0;          /* Any protocol */
 
     // tuple info creation - create all possible tuples and fill dst_addr, dst_port
-    rc = getaddrinfo(NULL, PORT, &server_addr_hints, &result_list);
+    rc = getaddrinfo(NULL, service, &server_addr_hints, &result_list);
     if (rc != 0) {
         fprintf(stderr, "server-create: getaddrinfo:: %s\n", gai_strerror(rc));
         return -1;
@@ -127,3 +127,8 @@ int tuple_inetsock_delete(int server_socket)
   return close(server_socket);
 }
 
+
+struct TupleClass tuple_inetsock = {
+    .create = tuple_inetsock_create,
+    .delete = tuple_inetsock_delete
+};

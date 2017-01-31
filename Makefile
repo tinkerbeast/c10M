@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -Wextra -Werror -c
+CFLAGS=-Wall -Wextra -Werror -g -c
 CFILE=*.c
 LINT_MODE=weak
 
@@ -14,7 +14,7 @@ main.o: main.c
 conf.o: conf.c conf.h
 	$(CC) $(CFLAGS) conf.c -o conf.o
 
-tuple.o: tuple_socket_inet.c tuple_socket_inet.h
+tuple.o: tuple_socket_inet.c tuple.h
 	$(CC) $(CFLAGS) tuple_socket_inet.c -o tuple.o
 
 poll.o: poll.c poll.h
