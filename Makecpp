@@ -1,0 +1,33 @@
+CC=g++
+CFLAGS=-std=c++03 -Wall -Wextra -Werror -g -c
+CFILE=*.cc
+LINT_MODE=weak
+
+all: httpio
+
+httpio: main.o conf.o tuple.o poll.o handler.o server.o
+	$(CC) main.o conf.o tuple.o poll.o handler.o server.o -o httpio
+
+main.o: main.cc
+	$(CC) $(CFLAGS) main.cc -o main.o
+
+tuple.o: tuple_socket_inet.cc tuple.h
+	$(CC) $(CFLAGS) tuple_socket_inet.cc -o tuple.o
+
+poll.o: poll.cc poll.h
+	$(CC) $(CFLAGS) poll.cc -o poll.o
+
+handler.o: handler.cc handler.h
+	$(CC) $(CFLAGS) handler.cc -o handler.o
+
+server.o: server.cc server.h
+	$(CC) $(CFLAGS) server.cc -o server.o
+
+clean:
+	rm *.o httpio
+
+style:
+	cppcheck --enable=all $(CFILE)
+
+lint:
+	splint +posixlib -I/usr/include/x86_64-linux-gnu -$(LINT_MODE) $(CFILE)
