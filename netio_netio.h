@@ -19,10 +19,10 @@ class NetIoInterface: {
         virtual int get_fd() = 0;
         virtual int open_fd(const char *node, const char *service, const char *proto, int flags) = 0;
         virtual int close_fd();
-        virtual ssize_t read_all(void *buffer, size_t n) = 0;
-        virtual ssize_t write_all(void *buffer, size_t n) = 0;
-        virtual ssize_t read_available(void *buffer, size_t n) = 0;
-        virtual ssize_t write_available(void *buffer, size_t n) = 0;
+        virtual int read_all(void *buffer, size_t in_size, size_t out_size) = 0;
+        virtual int write_all(void *buffer, size_t in_size, size_t out_size) = 0;
+        virtual int read_available(void *buffer, size_t in_size, size_t out_size) = 0;
+        virtual int write_available(void *buffer, size_t in_size, size_t out_size) = 0;
 };
 
 #endif
