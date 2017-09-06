@@ -9,6 +9,7 @@
 #include "server.h"
 
 #define SERVER_TRACE 1
+#define SERVER_BLOCK 0
 
 static char* default_request_response = 
 "HTTP/1.0 200 OK\n"
@@ -131,6 +132,10 @@ server_state_e server_http_process_response(int connector_fd, const struct serve
     }
 
     rsp_count++;
+
+    if (SERVER_BLOCK) {
+        // TODO: blocking call
+    }
 
     resp_len = snprintf(resp_str, sizeof(resp_str), default_request_response, rsp_count);
     write_len = writen(connector_fd, resp_str, resp_len);

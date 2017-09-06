@@ -115,6 +115,7 @@ int tuple_inetsock_create(int *server_socket, const char *node, const char* serv
     /* // TODO: Commented for performance reasons
     printf("server-create: socket %d ready on %s\n", server_sock, sockaddr_inet_ntop(server_addr.ai_addr, addr_str, sizeof(addr_str)));
     */
+    fprintf(stdout, "server-create: socket %d ready on %s:%s\n", server_sock, node, service);
 
     *server_socket = server_sock;
 

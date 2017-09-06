@@ -15,6 +15,7 @@
 #define HANDLER_PARALLEL_LIMIT 4096
 
 
+
 /******************************************************************************/
 /* common */
 /******************************************************************************/
@@ -43,7 +44,6 @@ static server_state_e handler_blockio(int connector_socket)
             return SERVER_ERROR;
     }
 
-    usleep(1000*100);
 
     state = server_http_process_response(connector_socket, &request);
     if (state != SERVER_OK) {
@@ -122,31 +122,53 @@ struct handler_lifecycle handler_fork = {
     .deinit = handler_deinit_uniprocess_blockio
 };
 
-#if 0
+
 /******************************************************************************/
 /* ptthread */
 /******************************************************************************/
 
 #include <pthread.h>
 
-void* connection_process_pthread_worker(void* param) {
+void* handler_process_pthread_worker(void* param) {
 
-    int connector_socket = (int)param;  // TODO: Fix bad way of doing things
+    server_state_e state = SERVER_ERROR;
+    int connector_socket = *((int*)param);
+    free(param);
 
-    server_handle_httpreq(connector_socket);
+    do {
+        state = handler_blockio(connector_socket);
+    } while(state == SERVER_CLIENT_KEEPALIVE); 
+
 
     close(connector_socket);
 
     return NULL;
 }
 
-int connection_process_pthread(int server_socket, int connector_socket)
+handler_state_e handler_process_pthread_blockio(int server_socket, int connector_socket)
 {
-    pthread_t thread;
-    if (pthread_create(&thread, NULL, connection_process_pthread_worker, (void*)connector_socket)) {
+
+    pthread_t thread;    
+    void * param = NULL;
+    
+    (void)server_socket;
+    
+    param = malloc(sizeof(connector_socket) * 1); // TODO: check malloc return
+    *((int*)param) = connector_socket;
+
+    // TODO: warn: parallel limit is not enforced
+
+    if (pthread_create(&thread, NULL, handler_process_pthread_worker, param)) {
         perror("ERROR creating thread.");
     }
 
-    return 0;
+    return HANDLER_UNTRACK_CONNECTOR; // since keepalive is done in thread context + blocking io
 }
-#endif
+
+struct handler_lifecycle handler_pthread = {
+    .init = handler_init_uniprocess_blockio,
+    .process = handler_process_pthread_blockio,
+    .deinit = handler_deinit_uniprocess_blockio
+};
+
+
