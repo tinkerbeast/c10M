@@ -1,12 +1,13 @@
-CC=gcc
-CFLAGS=-Wall -Wextra -Werror -g -c
-CFILE=*.c
-LINT_MODE=weak
+CC = gcc
+override CFLAGS += -Wall -Wextra -Werror -g -c
+override LDFLAGS += -lpthread
+CFILE = *.c
+LINT_MODE = weak
 
 all: httpio
 
 httpio: main.o conf.o tuple.o poll.o handler.o server.o
-	$(CC) main.o conf.o tuple.o poll.o handler.o server.o -o httpio
+	$(CC) main.o conf.o tuple.o poll.o handler.o server.o -o httpio $(LDFLAGS)
 
 main.o: main.c
 	$(CC) $(CFLAGS) main.c -o main.o
@@ -27,7 +28,10 @@ server.o: server.c server.h
 	$(CC) $(CFLAGS) server.c -o server.o
 
 clean:
-	rm *.o httpio
+	rm -f *.o httpio
+
+echo:
+	@echo "CC:$(CC), CFLAGS:$(CFLAGS), LDFLAGS:$(LDFLAGS), CFILE:$(CFILE), LINT:$(LINT_MODE)"
 
 style:
 	cppcheck --enable=all $(CFILE)

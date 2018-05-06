@@ -14,7 +14,15 @@ typedef enum handler_state_enum {
    HANDLER_OK = 0,
    HANDLER_TRACK_CONNECTOR,
    HANDLER_UNTRACK_CONNECTOR
-} handler_state_e; 
+} handler_state_e;
+
+
+typedef enum handler_lifecycle_enum {
+   PROCESS_UNIPROCESS,
+   PROCESS_FORK,
+   PROCESS_PTHREAD
+} handler_lifecycle_e;
+
 
 // function pointers
 
@@ -40,6 +48,8 @@ extern "C" {
 extern struct handler_lifecycle handler_uniprocess;
 
 extern struct handler_lifecycle handler_fork;
+
+extern struct handler_lifecycle handler_pthread;
 
 #ifdef __cplusplus
 }
