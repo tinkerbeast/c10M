@@ -40,6 +40,115 @@ static void poll_sigint_hook(void)
     sigaction(SIGINT, &sig_int_handler, NULL);
 }
 
+/******************************************************************************/
+struct Poller {
+    int (*init)(void* self, int server_socket);
+    int (*process)(int server_socket, int connector_socket);
+    int (*deinit)(void* self);
+};
+
+
+struct SelectPoller {
+    fd_set read_fds;
+    fd_set cached_read_fds;
+    int fd_max_value;
+    int fd_count;
+    int server_socket;
+    int iterator;
+};
+
+int  SelectPoller_init(struct SelectPoller* self, int server_socket)
+{
+    FD_ZERO(&self->read_fds);
+    FD_ZERO(&self->cached_read_fds);
+    FD_SET(server_socket, &self->read_fds);
+    self->fd_max_value = server_socket;
+    self->fd_count = 1;
+    self->server_socket = server_socket;
+    self->iterator = 0;
+
+    return 0;
+}
+
+int  SelectPoller_wait(struct SelectPoller* self)
+{
+    // we mutate the list we read, so make a cache
+    memcpy(&self->cached_read_fds, &self->read_fds, sizeof(fd_set));
+
+    // TODO: Major TODO: Currently the read and write calls within the process callbacks
+    //                   are blocking. We need to make them non-blockin for optimal use of
+    //                   the select loop. Multi-part read and writes need to be done upon
+    //                   muliple select events rather than looped blocking read/writes
+    // Dev-Note: The looped blocking read write is different from handling keep-alive
+    //           requests. The looped non-blocking multipart read/writes will still handle
+    //           only one request/response pair. However the process level looping will
+    //           determine keepalive connections.
+
+    // Wait for event        
+    return select(self->fd_max_value+1, &self->cached_read_fds, NULL, NULL, NULL);
+
+}
+
+int  SelectPoller_try_acceptfd(struct SelectPoller* self)
+{
+    socklen_t connector_addr_size = 0;
+    int connector_socket = -1;
+    struct sockaddr_storage connector_addr; // connector's address information
+
+    if (FD_ISSET(self->server_socket, &self->cached_read_fds)) {
+
+        // try to accept a connection
+        connector_addr_size = sizeof(connector_addr);
+        connector_socket = accept(self->server_socket, 
+                (struct sockaddr *)&connector_addr, &connector_addr_size);
+
+        // limits to accepting connection
+        if (connector_socket == -1) { // error case
+            return -1;
+            //perror("poll-select: accept:");
+        } else if (FD_SETSIZE > self->fd_count) { // accept connection
+            //char *connector_add_str = NULL;
+            FD_SET(connector_socket, &self->read_fds);
+            self->fd_max_value = (self->fd_max_value < connector_socket)? connector_socket: self->fd_max_value;
+            self->fd_count += 1;
+            /* // commented for performance reasons
+               connector_add_str = tuple_sockaddr_str((struct sockaddr *)&connector_addr, addr_str, sizeof(addr_str));
+               printf("poll-select: connection-accepted:: %s\n", connector_add_str);  */
+        } else { // can't accept any more connections
+            return -1;
+            //fprintf(stderr, "poll-select: fd-count:: read_fds can't accomodate more fds\n");
+        }
+    }
+
+    return connector_socket;
+}
+
+void  SelectPoller_iterator_reset(struct SelectPoller* self)
+{
+    self->iterator = 0;
+}
+
+int  SelectPoller_iterator_getfd(struct SelectPoller* self)
+{
+    if (self->iterator > self->fd_max_value) {
+        return -1;    
+    }
+    
+    while (self->iterator == self->server_socket 
+           || FD_ISSET(self->iterator, &self->cached_read_fds) == 0) {
+        self->iterator += 1;
+    }
+    
+    self->iterator += 1;    // increment the iterator for next step
+    return (self->iterator - 1); // return the last value before increment
+}
+
+void  SelectPoller_releasefd(struct SelectPoller* self, int fd)
+{
+    FD_CLR(fd, &self->read_fds);
+    self->fd_count -= 1;
+    close(fd);
+}
 
 /******************************************************************************/
 /* acceptloop */

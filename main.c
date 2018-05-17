@@ -1,4 +1,4 @@
-// freestanding
+// freestanding6
 // system
 // libraries
 #include <stdlib.h>
@@ -9,34 +9,27 @@
 #include "poll.h"
 
 /* CONFIG */
-#ifndef TUPLE_TYPE
-#define TUPLE_TYPE TUPLE_INET
-#endif
+#include "conf.h"
 
-#ifndef HANDLER_LIFECYCLE 
-#define HANDLER_LIFECYCLE PROCESS_UNIPROCESS
-#endif
-
-#define TUPLE_NODE NULL
-#define TUPLE_SERVICE "8888"
 
 /* CONFIG RESULT */
-static struct TupleClass *tuple;
-static struct handler_lifecycle *handler;
+static struct TupleClass *tuple = NULL;
+static struct handler_lifecycle *handler = NULL;
 
 
 void conf(void) {
 
+    // Assign tuple type based on config
     if (TUPLE_INET == TUPLE_TYPE) {
         tuple = &tuple_inetsock;
     } else {
         fprintf(stderr, "conf: no matching tuple module");
         exit(1);
     }
-
     tuple->node = TUPLE_NODE;
     tuple->service = TUPLE_SERVICE;
 
+    // Assign process type based on config
     switch (HANDLER_LIFECYCLE) {
         case PROCESS_UNIPROCESS:
             handler = &handler_uniprocess;
