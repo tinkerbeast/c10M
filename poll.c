@@ -70,6 +70,12 @@ int  SelectPoller_init(struct SelectPoller* self, int server_socket)
     return 0;
 }
 
+void  SelectPoller_deinit(struct SelectPoller* self)
+{
+    // nothing to do
+    (void)self;
+}
+
 int  SelectPoller_wait(struct SelectPoller* self)
 {
     // we mutate the list we read, so make a cache
@@ -217,6 +223,7 @@ int poll_acceptloop_blockio(int server_socket, handler_process_fn process_fn)
 /* select */
 /******************************************************************************/
 
+#if 0
 int poll_select_blockio(int server_socket, handler_process_fn process_fn)
 {
     int rc = -1;
@@ -324,4 +331,77 @@ int poll_select_blockio(int server_socket, handler_process_fn process_fn)
 
     return 0;
 }
+#endif
 
+int poll_select_blockio(int server_socket, handler_process_fn process_fn)
+{
+
+    int rc = -1;
+    handler_state_e handler_state = HANDLER_ERROR;
+    struct SelectPoller self;
+
+    // listen 
+    rc = listen(server_socket, POLL_CONNECTION_BACKLOG); // TODO: cleanup code
+    if (rc == -1) {
+        perror("poll-select: listen:");
+        return -1;
+    }
+    printf("poll-select: listening:: On socket %d\n", server_socket);
+
+    // init the poller
+    rc = SelectPoller_init(&self, server_socket);
+    if (rc == -1) {
+        fprintf(stderr, "poll-select: poller_init:: Initialisation failed\n");
+        return -1;
+    }
+
+    // hanlde server closing
+    poll_sigint_hook(); // TODO: add cleanup code
+
+    // selectloop
+    while(poll_run) {
+
+        // Wait for event
+        rc = SelectPoller_wait(&self);
+        if (rc == -1) { // TODO: WARN: OOB data is ignored
+            perror("poll-select: poller_wait:");
+            continue;
+        }
+
+        // Try accepting connection
+        rc = SelectPoller_try_acceptfd(&self);
+        if (rc == -1) {
+            perror("poll-accept: poller_try_acceptfd:");
+        }
+
+        // run through the existing connections looking for data to read
+        SelectPoller_iterator_reset(&self);
+        int fd_iterator = SelectPoller_iterator_getfd(&self);
+        while (fd_iterator > 0) {
+
+            handler_state = process_fn(server_socket, fd_iterator);
+            switch (handler_state) {
+                case HANDLER_TRACK_CONNECTOR:
+                    break;
+                case HANDLER_ERROR:
+                    fprintf(stderr, "poll-accept: process-error:: Closing connection\n");
+                case HANDLER_UNTRACK_CONNECTOR:
+                    SelectPoller_releasefd(&self, fd_iterator);
+                    break;
+                default:
+                    fprintf(stderr, "poll-accept: process-illegal:: Terminatinf server\n");
+                    // TODO: listen cleanup before exiting
+                    return -1;
+            }
+
+            fd_iterator = SelectPoller_iterator_getfd(&self);
+        }
+    }
+
+    SelectPoller_deinit(&self);
+    printf("poll-accept: graceful exit\n");
+
+    return 0;
+}
+
+// https://github.com/troydhanson/network/blob/master/tcp/server/sigio-server.c

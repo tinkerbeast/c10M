@@ -8,7 +8,7 @@
 // local
 #include "server.h"
 
-#define SERVER_TRACE 1
+#define SERVER_TRACE 0
 #define SERVER_BLOCK 0
 
 static char* default_request_response = 
