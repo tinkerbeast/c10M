@@ -11,6 +11,20 @@
 #define SERVER_TRACE 0
 #define SERVER_BLOCK 0
 
+
+static
+void busy_wait(unsigned int profile) {
+    int r = 1234;
+    for(unsigned int j=0; j<profile; j++) {
+        int s = 5678;
+        for(unsigned int k=0; k<profile; k++) {
+            r = r * 15;
+        }
+        s = s * r;
+    }
+}
+
+
 static char* default_request_response = 
 "HTTP/1.0 200 OK\n"
 "Content-type: text/html\n"
@@ -133,8 +147,9 @@ server_state_e server_http_process_response(int connector_fd, const struct serve
 
     rsp_count++;
 
+    busy_wait(0xfff);
     if (SERVER_BLOCK) {
-        // TODO: blocking call
+        // TODO: blocking call        
     }
 
     resp_len = snprintf(resp_str, sizeof(resp_str), default_request_response, rsp_count);

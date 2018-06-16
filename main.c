@@ -15,6 +15,8 @@
 /* CONFIG RESULT */
 static struct TupleClass *tuple = NULL;
 static struct handler_lifecycle *handler = NULL;
+static void *ioloop_inst = NULL;
+static struct Poller *ioloop_type = NULL;
 
 
 void conf(void) {
@@ -23,11 +25,29 @@ void conf(void) {
     if (TUPLE_INET == TUPLE_TYPE) {
         tuple = &tuple_inetsock;
     } else {
-        fprintf(stderr, "conf: no matching tuple module");
+        fprintf(stderr, "conf: no matching tuple module\n");
         exit(1);
     }
     tuple->node = TUPLE_NODE;
     tuple->service = TUPLE_SERVICE;
+
+    // Assign ioloop based on config
+    switch (IOLOOP_TYPE) {
+        case IOLOOP_ACCEPT:            
+            ioloop_type = &poller_accept;
+            break;
+        case IOLOOP_SELECT:            
+            ioloop_type = &poller_select;
+            break;
+        default:
+            fprintf(stderr, "conf: no matching ioloop module\n");
+            exit(1);
+    }
+    ioloop_inst = malloc(IOLOOP_INST_SIZE_MAX);
+    if (ioloop_inst == NULL) {
+      fprintf(stderr, "conf: ioloop_inst could not be allocated\n");
+      exit(1);
+    }
 
     // Assign process type based on config
     switch (HANDLER_LIFECYCLE) {
@@ -41,7 +61,7 @@ void conf(void) {
             handler = &handler_pthread;
             break;
         default:
-            fprintf(stderr, "conf: no matching tuple module");
+            fprintf(stderr, "conf: no matching process module\n");
             exit(1);
     }
 }    
@@ -63,7 +83,7 @@ int main(int argc, char* argv[])
     return EXIT_FAILURE;
   }
 
-  rc = poll_select_blockio(server_sock, handler->process);
+  rc = poll_ioloop(server_sock, handler->process, ioloop_type, ioloop_inst);
   if (rc != 0) {
     fprintf(stderr, "main: server-poll failed");
     return EXIT_FAILURE;
