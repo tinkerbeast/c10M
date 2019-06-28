@@ -1,22 +1,16 @@
 // Job queue + Job pool
 // ===========================================================================
 
+
+#include "jobpool.h"
+
 // cstd
+#include <stdio.h>
 #include <stdlib.h>
 // system
 #include <pthread.h>
-#include <setjmp.h>
 #include <unistd.h>
-// freestanding
-#include <stdbool.h>
 
-struct jobnode {
-    int sockfd;
-    sigjmp_buf buf;
-    bool yielded;
-    struct jobnode * next;
-    struct jobnode * prev;
-};
 
 struct jobpool {
     struct jobnode * free_pool;
@@ -27,28 +21,28 @@ struct jobpool {
     int size;
     pthread_spinlock_t flock; // DEVNOTE: Using spinlock since I don't want context switch in case of wait
     pthread_spinlock_t qlock; // DEVNOTE: Using spinlock since I don't want context switch in case of wait
-} _jobpool = {NULL, NULL, NULL};
-
-static inline void job_yieldable(struct jobnode *);
-static inline int job_yield(struct jobnode *, int);
-
-#define job_yieldable(x) do { \
-        if (x.yielded) siglongjmp(x.buf, 1); \
-    } while(0)
-
-
-#define job_yield(x, y)  if (sigsetjmp(x.buf, 0) == 0) { x.yielded = true; return y; } \
-                     else { x.yielded = false; }
+} _jobpool = {
+    .free_pool = NULL, 
+    .blocking_map = NULL, 
+    .active_queue = NULL, 
+    .free_count = 0, 
+    .queue_count = 0, 
+    .size = 0};
 
 
-
+// TODO: counterpart destroy function
 int jobpool_init(int size) {
     struct jobnode * jobs = malloc(sizeof(struct jobnode) * size);
-    if (NULL == jobs) { return -1; // TODO: errno print 
+    if (NULL == jobs) { 
+        perror("jobpool: malloc: allocating jobs");
+        return -1;
     }
     
     _jobpool.blocking_map = malloc(sizeof(struct jobnode *) * size);
-    if (NULL == jobs) { return -1; // TODO: errno print 
+    if (NULL == jobs) {
+        free(jobs);
+        perror("jobpool: malloc: allocating map");
+        return -1;
     }
 
     for (int i = 0; i < size - 1; i++) {
@@ -62,12 +56,29 @@ int jobpool_init(int size) {
     _jobpool.free_count = size;
     _jobpool.size = size;
 
-    pthread_spin_init(&_jobpool.flock, PTHREAD_PROCESS_PRIVATE); // TODO: check return
-    return pthread_spin_init(&_jobpool.qlock, PTHREAD_PROCESS_PRIVATE);
+    int ret = -1;
+    ret = pthread_spin_init(&_jobpool.flock, PTHREAD_PROCESS_PRIVATE);
+    if (ret != 0) {
+        free(jobs);
+        free(_jobpool.blocking_map);
+        perror("jobpool: pthread_spin_init: freepool");
+        return -1;
+    }
+
+    ret = pthread_spin_init(&_jobpool.qlock, PTHREAD_PROCESS_PRIVATE);
+    if (ret != 0) {
+        free(jobs);
+        free(_jobpool.blocking_map);
+        pthread_spin_destroy(&_jobpool.flock); // TODO: even if spin destroy fails, can't do anything about it
+        perror("jobpool: pthread_spin_init: queue");
+        return -1;
+    }
+
+    return 0;
 }
 
 // WARN: SINGLE-THREADED USE ONLY
-struct jobnode * jobpool_blocked_get(unsigned int sockfd) {
+struct jobnode * jobpool_blocked_get(int sockfd) {
     if (sockfd > _jobpool.size) {
         exit(1); // TODO: serious unhandled case where sockfd exceeds MAX_CONNECTIONS
     }
