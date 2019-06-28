@@ -11,7 +11,7 @@
 #define SERVER_TRACE 0
 #define SERVER_BLOCK 0
 
-
+#if 0
 static
 void busy_wait(unsigned int profile) {
     int r = 1234;
@@ -23,17 +23,19 @@ void busy_wait(unsigned int profile) {
         s = s * r;
     }
 }
+#endif
 
 
 static char* default_request_response = 
-"HTTP/1.0 200 OK\n"
-"Content-type: text/html\n"
-"\n"
-"<html>\n"
-" <body>\n"
-"  <h1>Hello Client %d!</h1>\n"
-" </body>\n"
-"</html>\n";
+"HTTP/1.0 200 OK\r\n"
+"Content-type: text/html\r\n"
+"Content-Length: 146\r\n"
+"\r\n"
+"<html>\n                     "
+" <body>\n                    "
+"  <h1>Hello Client %08x!</h1>\n"
+" </body>\n                   "
+"</html>\n                    ";
 
 // read avaiable bytes
 static ssize_t reada(int fd, void *buffer, size_t n)
@@ -147,7 +149,7 @@ server_state_e server_http_process_response(int connector_fd, const struct serve
 
     rsp_count++;
 
-    busy_wait(0xfff);
+    //busy_wait(0xfff);
     if (SERVER_BLOCK) {
         // TODO: blocking call        
     }
