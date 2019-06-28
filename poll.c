@@ -94,6 +94,7 @@ int poll_ioloop(int server_socket, handler_process_fn process_fn, struct Poller 
                     break;
                 case HANDLER_ERROR:
                     fprintf(stderr, "poll: process-error:: Closing connection\n");
+                    __attribute__ ((fallthrough)); // TODO: handle gcc specific annotations
                 case HANDLER_UNTRACK_CONNECTOR:
                     poller_class->releasefd(poller_inst, fd_iterator);
                     break;
