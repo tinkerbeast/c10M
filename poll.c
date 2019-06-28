@@ -78,14 +78,16 @@ int poll_ioloop(int server_socket, handler_process_fn process_fn, struct Poller 
         }
 
         // Try accepting connection
-        rc = poller_class->try_acceptfd(poller_inst);
+        int client_sock = -1;
+        rc = poller_class->try_acceptfd(poller_inst, &client_sock);
         if (rc == -1) {
             perror("poll: poller_try_acceptfd:");
         }
 
         // run through the existing connections looking for data to read
+        sock_state_e sock_state = SOCK_UNKNOWN;
         poller_class->iterator_reset(poller_inst);
-        int fd_iterator = poller_class->iterator_getfd(poller_inst);
+        int fd_iterator = poller_class->iterator_getfd(poller_inst, &sock_state);
         while (fd_iterator > 0) {
 
             handler_state = process_fn(server_socket, fd_iterator);
@@ -104,7 +106,7 @@ int poll_ioloop(int server_socket, handler_process_fn process_fn, struct Poller 
                     return -1;
             }
 
-            fd_iterator = poller_class->iterator_getfd(poller_inst);
+            fd_iterator = poller_class->iterator_getfd(poller_inst, &sock_state);
         }
     }
 
@@ -148,7 +150,7 @@ int AcceptPoller_wait(void * this)
     return 0;
 }
 
-int AcceptPoller_try_acceptfd(void * this)
+int AcceptPoller_try_acceptfd(void * this, int * sockfd)
 {
     struct sockaddr_storage connector_addr;
     socklen_t connector_addr_size = 0;
@@ -160,6 +162,7 @@ int AcceptPoller_try_acceptfd(void * this)
     if (self->connector_socket == -1) {
         return -1;
     } else {
+        *sockfd = self->connector_socket;
         return 0;
     }
 }
@@ -170,13 +173,15 @@ void AcceptPoller_iterator_reset(void * this)
     (void)this;
 }
 
-int AcceptPoller_iterator_getfd(void * this)
+int AcceptPoller_iterator_getfd(void * this, sock_state_e * sock_state)
 {
     struct AcceptPoller* self = this;
 
     int temp = self->connector_socket;
     
     self->connector_socket = -1;
+
+    *sock_state = SOCK_READABLE; // TODO: blindly setting readable might not work in all cases
 
     return temp;
 }
@@ -203,8 +208,9 @@ struct Poller poller_accept = {
 /******************************************************************************/
 
 struct SelectPoller {
-    fd_set read_fds;
+    fd_set all_fds;
     fd_set cached_read_fds;
+    fd_set cached_write_fds;
     int fd_max_value;
     int fd_count;
     int server_socket;
@@ -217,9 +223,12 @@ int SelectPoller_init(void * this, int server_socket)
 {
     struct SelectPoller* self = this;
 
-    FD_ZERO(&self->read_fds);
+    FD_ZERO(&self->all_fds);
+
     FD_ZERO(&self->cached_read_fds);
-    FD_SET(server_socket, &self->read_fds);
+    FD_ZERO(&self->cached_write_fds);
+
+    FD_SET(server_socket, &self->all_fds);
     self->fd_max_value = server_socket;
     self->fd_count = 1;
     self->server_socket = server_socket;
@@ -239,7 +248,8 @@ int SelectPoller_wait(void * this)
     struct SelectPoller* self = this;
 
     // we mutate the list we read, so make a cache
-    memcpy(&self->cached_read_fds, &self->read_fds, sizeof(fd_set));
+    memcpy(&self->cached_read_fds, &self->all_fds, sizeof(fd_set));
+    memcpy(&self->cached_write_fds, &self->all_fds, sizeof(fd_set));
 
     // TODO: Major TODO: Currently the read and write calls within the process callbacks
     //                   are blocking. We need to make them non-blockin for optimal use of
@@ -250,12 +260,14 @@ int SelectPoller_wait(void * this)
     //           only one request/response pair. However the process level looping will
     //           determine keepalive connections.
 
-    // Wait for event        
-    return select(self->fd_max_value+1, &self->cached_read_fds, NULL, NULL, NULL);
+    // Wait for event
+    // TODO: out of band data is not considered, which would have appeared as part of the except fd set
+    return select(self->fd_max_value+1, 
+            &self->cached_read_fds, &self->cached_write_fds, NULL, NULL);
 
 }
 
-int SelectPoller_try_acceptfd(void * this)
+int SelectPoller_try_acceptfd(void * this, int * sockfd)
 {
     struct SelectPoller* self = this;
 
@@ -276,9 +288,10 @@ int SelectPoller_try_acceptfd(void * this)
             return -1;            
         } else if (FD_SETSIZE > self->fd_count) { // accept connection
             //char *connector_add_str = NULL;
-            FD_SET(connector_socket, &self->read_fds);
+            FD_SET(connector_socket, &self->all_fds);
             self->fd_max_value = (self->fd_max_value < connector_socket)? connector_socket: self->fd_max_value;
             self->fd_count += 1;
+            *sockfd = connector_socket;
             /* // commented for performance reasons
                connector_add_str = tuple_sockaddr_str((struct sockaddr *)&connector_addr, addr_str, sizeof(addr_str));
                printf("poll-select: connection-accepted:: %s\n", connector_add_str);  */
@@ -299,18 +312,27 @@ void SelectPoller_iterator_reset(void * this)
     self->iterator = 0;
 }
 
-int SelectPoller_iterator_getfd(void * this)
+int SelectPoller_iterator_getfd(void * this, sock_state_e * sock_state)
 {
     struct SelectPoller* self = this;
 
     if (self->iterator > self->fd_max_value) {
         return -1;    
     }
-    
-    while (self->iterator == self->server_socket 
-           || FD_ISSET(self->iterator, &self->cached_read_fds) == 0) {
+
+    int readable = FD_ISSET(self->iterator, &self->cached_read_fds);
+    int writeable = FD_ISSET(self->iterator, &self->cached_write_fds);
+    while (self->iterator == self->server_socket || readable == 0 || writeable == 0) {
         self->iterator += 1;
+        readable = FD_ISSET(self->iterator, &self->cached_read_fds);
+        writeable = FD_ISSET(self->iterator, &self->cached_write_fds);
     }
+
+    sock_state_e temp = SOCK_UNKNOWN;
+    temp = readable? SOCK_READABLE : temp;
+    temp = writeable? SOCK_WRITABLE : temp;
+    temp = (readable && writeable)? SOCK_SHUTDOWN : temp;
+    *sock_state = temp;
     
     self->iterator += 1;    // increment the iterator for next step
     return (self->iterator - 1); // return the last value before increment
@@ -320,7 +342,7 @@ void SelectPoller_releasefd(void * this, int fd)
 {
     struct SelectPoller* self = this;
 
-    FD_CLR(fd, &self->read_fds);
+    FD_CLR(fd, &self->all_fds);
     self->fd_count -= 1;
     close(fd);
 }

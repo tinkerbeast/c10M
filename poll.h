@@ -19,15 +19,26 @@ typedef enum ioloop_type_enum {
    IOLOOP_EPOLL
 } ioloop_type_e;
 
+typedef enum sock_state_enum {
+    SOCK_READABLE,
+    SOCK_WRITABLE,
+    SOCK_OOB,
+    SOCK_SHUTDOWN,
+    SOCK_UNKNOWN
+} sock_state_e;
+
+
+
+
 // aggregate types
 
 struct Poller {
     int (*init)(void* self, int server_socket);
     void (*deinit)(void* self);
     int (*wait)(void* self);
-    int (*try_acceptfd)(void* self);
+    int (*try_acceptfd)(void* self, int * sockfd);
     void (*iterator_reset)(void* self);
-    int (*iterator_getfd)(void* self);
+    int (*iterator_getfd)(void* self, sock_state_e * state);
     void (*releasefd)(void* self, int fd);
 };
 
