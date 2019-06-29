@@ -21,6 +21,7 @@ struct jobpool {
     int size;
     pthread_spinlock_t flock; // DEVNOTE: Using spinlock since I don't want context switch in case of wait
     pthread_spinlock_t qlock; // DEVNOTE: Using spinlock since I don't want context switch in case of wait
+    pthread_spinlock_t block; // DEVNOTE: Using spinlock since I don't want context switch in case of wait
 } _jobpool = {
     .free_pool = NULL, 
     .blocking_map = NULL, 
@@ -74,20 +75,51 @@ int jobpool_init(int size) {
         return -1;
     }
 
-    return 0;
+    // TODO: resource freeing for failure case
+    return pthread_spin_init(&_jobpool.block, PTHREAD_PROCESS_PRIVATE);
 }
 
 // WARN: SINGLE-THREADED USE ONLY
 struct jobnode * jobpool_blocked_get(int sockfd) {
-    if (sockfd > _jobpool.size) {
+    if (sockfd > _jobpool.size) { // TODO: Non thread safe access
+        fprintf(stderr, "jobpool: socket larger than map\n");
         exit(1); // TODO: serious unhandled case where sockfd exceeds MAX_CONNECTIONS
     }
+
+    if (pthread_spin_lock(&_jobpool.block) != 0) goto EXIT;
 
     struct jobnode * temp = _jobpool.blocking_map[sockfd];
     _jobpool.blocking_map[sockfd] = NULL;
 
+    if (pthread_spin_unlock(&_jobpool.block) != 0) goto EXIT;
+
     return temp;
+
+EXIT:
+    // TODO: error prints
+    exit(1); // spinlock taking only fails in case of a dead lock, no recovery for that case
+    return NULL;
 }
+
+int jobpool_blocked_put(int sockfd, struct jobnode* job) {
+    if (sockfd > _jobpool.size) { // TODO: Non thread safe access
+        fprintf(stderr, "jobpool: socket larger than map\n");
+        exit(1); // TODO: serious unhandled case where sockfd exceeds MAX_CONNECTIONS
+    }
+
+    if (pthread_spin_lock(&_jobpool.block) != 0) goto EXIT;
+
+    _jobpool.blocking_map[sockfd] = job;
+
+    if (pthread_spin_unlock(&_jobpool.block) != 0) goto EXIT;
+
+    return 0;
+
+EXIT:
+    // TODO: error prints
+    exit(1); // spinlock taking only fails in case of a dead lock, no recovery for that case
+}
+
 
 struct jobnode * jobpool_free_acquire(void) {
     
@@ -106,6 +138,7 @@ struct jobnode * jobpool_free_acquire(void) {
     if (temp != NULL) {
         temp->sockfd = -1;
         temp->yielded = false;
+        temp->closed = false;
         temp->next = NULL;
         temp->prev = NULL;
     }

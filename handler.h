@@ -32,7 +32,6 @@ typedef handler_state_e (*handler_process_fn)(int server_socket, int connector_s
 
 struct handler_lifecycle {
     handler_state_e (*init)(void);
-    handler_state_e (*process)(int server_socket, int connector_socket);
     handler_state_e (*deinit)(void);
 };
 

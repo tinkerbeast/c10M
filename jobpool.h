@@ -17,10 +17,11 @@ namespace c10m_job {
 
 struct jobnode {
     int sockfd;
-    sigjmp_buf buf;
-    bool yielded;
     struct jobnode * next;
     struct jobnode * prev;
+    bool closed;
+    bool yielded;
+    sigjmp_buf buf;
 };
 
 
@@ -47,6 +48,8 @@ extern "C" {
 int jobpool_init(int size);
 
 struct jobnode * jobpool_blocked_get(int sockfd);
+
+int jobpool_blocked_put(int sockfd, struct jobnode * node);
 
 struct jobnode * jobpool_free_acquire(void);
 

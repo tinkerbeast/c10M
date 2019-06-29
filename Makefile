@@ -7,7 +7,7 @@ LINT_MODE = weak
 all: httpio
 
 httpio: main.o tuple.o poll.o handler.o server.o jobpool.o
-	$(CC) main.o tuple.o poll.o handler.o server.o -o httpio $(LDFLAGS)
+	$(CC) main.o tuple.o poll.o handler.o server.o jobpool.o -o httpio $(LDFLAGS)
 
 main.o: main.c
 	$(CC) $(CFLAGS) main.c -o main.o

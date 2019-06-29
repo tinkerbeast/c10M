@@ -1,17 +1,19 @@
-// freestanding
-#include <sys/types.h>
-// systems
-#include <signal.h>
-#include <unistd.h>
-#include <sys/select.h>
-#include <sys/socket.h>
-// libraries
+#include "poll.h"
+
+// local
+#include "jobpool.h"
+#include "handler.h"
+// stdlib
 #include <stdio.h>
 #include <string.h>
-// local
-#include "handler.h"
+// systems
+#include <signal.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <unistd.h>
+// freestanding
+#include <sys/types.h>
 
-#include "poll.h"
 
 
 #define POLL_CONNECTION_BACKLOG 10
@@ -43,11 +45,10 @@ static void poll_sigint_hook(void)
 
 
 
-int poll_ioloop(int server_socket, handler_process_fn process_fn, struct Poller * poller_class, void * poller_inst)
+int poll_ioloop(int server_socket, struct Poller * poller_class, void * poller_inst)
 {
 
     int rc = -1;
-    handler_state_e handler_state = HANDLER_ERROR;
 
     // listen 
     rc = listen(server_socket, POLL_CONNECTION_BACKLOG); // TODO: cleanup code
@@ -82,6 +83,14 @@ int poll_ioloop(int server_socket, handler_process_fn process_fn, struct Poller 
         rc = poller_class->try_acceptfd(poller_inst, &client_sock);
         if (rc == -1) {
             perror("poll: poller_try_acceptfd:");
+        } else {
+            struct jobnode* job = jobpool_free_acquire();
+            if (NULL == job) {
+                perror("poll: poller_try_acceptfd: job creation");
+            } else {
+                job->sockfd = client_sock;
+                jobpool_blocked_put(client_sock, job); // TODO: handle put fail case
+            }
         }
 
         // run through the existing connections looking for data to read
@@ -90,6 +99,16 @@ int poll_ioloop(int server_socket, handler_process_fn process_fn, struct Poller 
         int fd_iterator = poller_class->iterator_getfd(poller_inst, &sock_state);
         while (fd_iterator > 0) {
 
+            struct jobnode * job = jobpool_blocked_get(fd_iterator);
+            if (NULL == job) {
+                fprintf(stderr, "poll: illegal-stat:: Terminating server\n");
+                // TODO: listen cleanup before exiting
+                return -1;
+            }
+
+            jobpool_active_enqueue(job);
+
+#if 0            
             handler_state = process_fn(server_socket, fd_iterator);
             switch (handler_state) {
                 case HANDLER_TRACK_CONNECTOR:
@@ -105,8 +124,22 @@ int poll_ioloop(int server_socket, handler_process_fn process_fn, struct Poller 
                     // TODO: listen cleanup before exiting
                     return -1;
             }
+#endif            
 
             fd_iterator = poller_class->iterator_getfd(poller_inst, &sock_state);
+        }
+
+        // Cleanup all fds marked for cleanup
+        int max_fd = poller_class->maxfd(poller_inst);
+        for (int sockfd = server_socket; sockfd <= max_fd; sockfd++) {
+            struct jobnode * job = jobpool_blocked_get(sockfd);
+            if (NULL == job) {
+                continue;
+            } else if (job->closed) {
+                poller_class->releasefd(poller_inst, sockfd);
+                jobpool_free_release(job);
+
+            }
         }
     }
 
@@ -123,6 +156,7 @@ int poll_ioloop(int server_socket, handler_process_fn process_fn, struct Poller 
 struct AcceptPoller {
     int server_socket;
     int connector_socket;
+    int fd_max_value;
 };
 
 // TODO check sizeof AcceptPoller against IOLOOP_INST_SIZE_MAX 
@@ -163,6 +197,7 @@ int AcceptPoller_try_acceptfd(void * this, int * sockfd)
         return -1;
     } else {
         *sockfd = self->connector_socket;
+        self->fd_max_value = (self->fd_max_value < self->connector_socket)? self->connector_socket: self->fd_max_value;        
         return 0;
     }
 }
@@ -188,9 +223,19 @@ int AcceptPoller_iterator_getfd(void * this, sock_state_e * sock_state)
 
 void AcceptPoller_releasefd(void * this, int fd)
 {
-    (void)this;
+    struct AcceptPoller* self = this;
 
     close(fd);
+    if (fd == self->fd_max_value) {
+        self->fd_max_value -= 1;
+    }
+}
+
+int AcceptPoller_maxfd(void * this)
+{
+    struct AcceptPoller* self = this;
+
+    return self->fd_max_value;
 }
 
 struct Poller poller_accept = {
@@ -200,7 +245,8 @@ struct Poller poller_accept = {
     .try_acceptfd = AcceptPoller_try_acceptfd,
     .iterator_reset = AcceptPoller_iterator_reset,
     .iterator_getfd = AcceptPoller_iterator_getfd,
-    .releasefd = AcceptPoller_releasefd
+    .releasefd = AcceptPoller_releasefd,
+    .maxfd =  AcceptPoller_maxfd
 };
 
 /******************************************************************************/
@@ -344,7 +390,17 @@ void SelectPoller_releasefd(void * this, int fd)
 
     FD_CLR(fd, &self->all_fds);
     self->fd_count -= 1;
+    if (self->fd_max_value == fd) {
+        self->fd_max_value -= 1;
+    }
     close(fd);
+}
+
+int SelectPoller_maxfd(void * this)
+{
+    struct SelectPoller* self = this;
+
+    return self->fd_max_value;
 }
 
 struct Poller poller_select = {
@@ -354,7 +410,8 @@ struct Poller poller_select = {
     .try_acceptfd = SelectPoller_try_acceptfd,
     .iterator_reset = SelectPoller_iterator_reset,
     .iterator_getfd = SelectPoller_iterator_getfd,
-    .releasefd = SelectPoller_releasefd
+    .releasefd = SelectPoller_releasefd,
+    .maxfd = SelectPoller_maxfd
 };
 
 

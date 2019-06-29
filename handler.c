@@ -1,15 +1,19 @@
-// freestanding
-#include <stddef.h>
-// systems
-#include <stdlib.h> 
-#include <unistd.h>
-#include <signal.h>
+#include "handler.h"
+
+// local
+#include "jobpool.h"
+#include "server.h"
 // libraries
 #include <stdio.h>
-// local
-#include "server.h"
+#include <stdlib.h> 
+// systems
+#include <pthread.h>
+#include <signal.h>
+#include <unistd.h>
+// freestanding
+#include <stdbool.h>
+#include <stddef.h>
 
-#include "handler.h"
 
 
 #define HANDLER_PARALLEL_LIMIT 4096
@@ -20,7 +24,7 @@
 /* common */
 /******************************************************************************/
 
-static server_state_e handler_blockio(int connector_socket)
+static handler_state_e handler_common_blockio(int connector_socket)
 {
     server_state_e state = SERVER_ERROR;
     struct server_http_request request = {0};
@@ -39,9 +43,8 @@ static server_state_e handler_blockio(int connector_socket)
             break;
         case SERVER_CLIENT_CLOSED:
         case SERVER_CLIENT_ERROR:
-            return state;
         default:
-            return SERVER_ERROR;
+            return HANDLER_ERROR;
     }
 
 
@@ -50,7 +53,43 @@ static server_state_e handler_blockio(int connector_socket)
         return state;
     }
 
-    return (keep_alive? SERVER_CLIENT_KEEPALIVE: SERVER_CLIENT_CLOSE_REQ) ;
+    return (keep_alive? HANDLER_TRACK_CONNECTOR: HANDLER_UNTRACK_CONNECTOR) ;
+}
+
+
+int handler_common_init(void *(*start_routine) (void *))
+{
+    pthread_t thread;
+    pthread_attr_t attr;
+    int ret;
+
+    ret = pthread_attr_init(&attr);
+    if (ret != 0) {
+        perror("handler: common-init: init");
+        return -1;
+    }
+
+    ret = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (ret != 0) {
+        // TODO: free up attr
+        perror("handler: common-init: detach");
+        return -1;
+    }
+
+    ret = pthread_create(&thread, &attr, start_routine, NULL);
+    if (ret != 0) {
+        // TODO: free up attr
+        perror("handler: common-init: create");
+        return -1;
+    }
+
+    ret = pthread_attr_destroy(&attr);
+    if (ret != 0) {
+        perror("handler: common-init: attr-destroy");
+        // WARNING: Possible memory-leak by not handling error
+    }
+
+    return 0;
 }
 
 
@@ -58,16 +97,60 @@ static server_state_e handler_blockio(int connector_socket)
 /* uniprocess */
 /******************************************************************************/
 
-handler_state_e handler_init_uniprocess_blockio(void)
+static sig_atomic_t handler_run = true;
+
+static void * handler_process_uniprocess(void * param)
 {
+    (void)param;
+    
+    while(handler_run) {
+        // get a pending job
+        struct jobnode * job = jobpool_active_dequeue();
+        if (NULL == job) {
+            usleep(10000); // TODO: change deprecated api
+            continue;
+        }
+
+        int ret = -1;
+        handler_state_e state = handler_common_blockio(job->sockfd);
+        switch(state) {
+            case HANDLER_TRACK_CONNECTOR:
+                ret = jobpool_blocked_put(job->sockfd, job);
+                break;
+            case HANDLER_UNTRACK_CONNECTOR:
+            case HANDLER_ERROR:
+            default:
+                job->closed = true;
+                ret = jobpool_blocked_put(job->sockfd, job);
+        }
+
+        if (ret != 0) {
+            fprintf(stderr, "handler: can't handle error\n");
+            exit(1);
+        }
+    }
+
+    return NULL;
+}
+
+handler_state_e handler_init_uniprocess(void)
+{
+    int ret = -1;
+
+    ret = handler_common_init(handler_process_uniprocess);
+
+    return (ret == 0)? HANDLER_OK: HANDLER_ERROR;
+}
+
+handler_state_e handler_deinit_uniprocess(void)
+{
+    handler_run = false;
     return HANDLER_OK;
 }
 
-handler_state_e handler_deinit_uniprocess_blockio(void)
-{
-    return HANDLER_OK;
-}
 
+
+#if 0
 handler_state_e handler_process_uniprocess_blockio(int server_socket, int connector_socket)
 {
     server_state_e state = SERVER_ERROR;
@@ -82,18 +165,71 @@ handler_state_e handler_process_uniprocess_blockio(int server_socket, int connec
         return HANDLER_UNTRACK_CONNECTOR;
     }
 }
+#endif
 
 struct handler_lifecycle handler_uniprocess = {
-    .init = handler_init_uniprocess_blockio,
-    .process = handler_process_uniprocess_blockio,
-    .deinit = handler_deinit_uniprocess_blockio
+    .init = handler_init_uniprocess,
+    .deinit = handler_deinit_uniprocess
 };
 
 
 /******************************************************************************/
 /* fork */
 /******************************************************************************/
+static void * handler_process_fork(void * param)
+{
+    (void)param;
 
+    signal(SIGCHLD, SIG_IGN); // TODO: Ignore sigchild in a better way
+
+    // TODO: warn: parallel limit is not enforced
+
+    while(handler_run) {
+        // get a pending job
+        struct jobnode * job = jobpool_active_dequeue();
+        if (NULL == job) {
+            usleep(10000); // TODO: change deprecated api
+            continue;
+        }   
+
+        if (!fork()) { // this is the child process
+            // TODO: close the server socket on the child side
+            //close(server_socket); // child doesn't need the server
+
+            // doesn't make sense for a process not to handle keep-alive
+            handler_state_e state = HANDLER_ERROR;
+            do {
+                state = handler_common_blockio(job->sockfd);
+            } while(state == HANDLER_TRACK_CONNECTOR); 
+
+            exit(EXIT_SUCCESS); // TODO: handle error conditions
+        } else { // this is the parent process
+            // since keepalive is done in process context,
+            // no need to keep the client socket open here            
+            job->closed = true;
+            jobpool_blocked_put(job->sockfd, job); // TODO: check return value
+        }
+    }
+
+    return NULL; 
+}
+
+handler_state_e handler_init_fork(void)
+{
+    int ret = -1;
+
+    ret = handler_common_init(handler_process_fork);
+
+    return (ret == 0)? HANDLER_OK: HANDLER_ERROR;
+}
+
+handler_state_e handler_deinit_fork(void)
+{
+    handler_run = false;
+    return HANDLER_OK;
+}
+
+#if 0
 int handler_process_fork_blockio(int server_socket, int connector_socket)
 {
     server_state_e state = SERVER_ERROR;
@@ -115,11 +251,11 @@ int handler_process_fork_blockio(int server_socket, int connector_socket)
 
     return HANDLER_UNTRACK_CONNECTOR; // since keepalive is done in process context + blocking io
 }
+#endif
 
 struct handler_lifecycle handler_fork = {
-    .init = handler_init_uniprocess_blockio,
-    .process = handler_process_fork_blockio,
-    .deinit = handler_deinit_uniprocess_blockio
+    .init = handler_init_fork,
+    .deinit = handler_deinit_fork
 };
 
 
@@ -136,7 +272,7 @@ void* handler_process_pthread_worker(void* param) {
     free(param);
 
     do {
-        state = handler_blockio(connector_socket);
+        state = handler_common_blockio(connector_socket);
     } while(state == SERVER_CLIENT_KEEPALIVE); 
 
 
@@ -166,9 +302,8 @@ handler_state_e handler_process_pthread_blockio(int server_socket, int connector
 }
 
 struct handler_lifecycle handler_pthread = {
-    .init = handler_init_uniprocess_blockio,
-    .process = handler_process_pthread_blockio,
-    .deinit = handler_deinit_uniprocess_blockio
+    .init = handler_init_uniprocess,
+    .deinit = handler_deinit_uniprocess
 };
 
 

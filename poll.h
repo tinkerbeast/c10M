@@ -40,6 +40,7 @@ struct Poller {
     void (*iterator_reset)(void* self);
     int (*iterator_getfd)(void* self, sock_state_e * state);
     void (*releasefd)(void* self, int fd);
+    int (*maxfd)(void* self);
 };
 
 
@@ -49,7 +50,7 @@ extern "C" {
 
 // protoypes
 
-int poll_ioloop(int server_socket, handler_process_fn process_fn, struct Poller * poller_class, void * poller_inst);
+int poll_ioloop(int server_socket, struct Poller * poller_class, void * poller_inst);
 
 
 // externs

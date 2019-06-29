@@ -83,7 +83,7 @@ int main(int argc, char* argv[])
     return EXIT_FAILURE;
   }
 
-  rc = poll_ioloop(server_sock, handler->process, ioloop_type, ioloop_inst);
+  rc = poll_ioloop(server_sock, ioloop_type, ioloop_inst);
   if (rc != 0) {
     fprintf(stderr, "main: server-poll failed");
     return EXIT_FAILURE;
