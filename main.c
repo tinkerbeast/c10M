@@ -4,12 +4,15 @@
 #include <stdlib.h>
 #include <stdio.h>
 // local
-#include "tuple.h"
-#include "handler.h"
 #include "poll.h"
+#include "handler.h"
+#include "jobpool.h"
+#include "tuple.h"
 
 /* CONFIG */
 #include "conf.h"
+
+#define MAX_CON 10000
 
 
 /* CONFIG RESULT */
@@ -82,10 +85,30 @@ int main(int argc, char* argv[])
     fprintf(stderr, "main: server-create failed");
     return EXIT_FAILURE;
   }
+  
+  rc = jobpool_init(MAX_CON);
+  if (rc != 0) {
+    fprintf(stderr, "main: jobpool-create failed");
+    return EXIT_FAILURE;
+  }
+
+  rc = handler->init();
+  if (rc != 0) {
+    fprintf(stderr, "main: handler-create failed");
+    return EXIT_FAILURE;
+  }
 
   rc = poll_ioloop(server_sock, ioloop_type, ioloop_inst);
   if (rc != 0) {
     fprintf(stderr, "main: server-poll failed");
+    return EXIT_FAILURE;
+  }
+
+  printf("Exited ioloop cleanly\n");
+  
+  rc = handler->deinit();
+  if (rc != 0) {
+    fprintf(stderr, "main: handler-cleanup failed");
     return EXIT_FAILURE;
   }
 

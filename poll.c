@@ -69,7 +69,10 @@ int poll_ioloop(int server_socket, struct Poller * poller_class, void * poller_i
     poll_sigint_hook(); // TODO: add cleanup code
 
     // selectloop
+    int ddd = 0;
     while(poll_run) {
+        printf("Loop %d\n", ddd);
+        ddd++;
 
         // Wait for event
         rc = poller_class->wait(poller_inst);
@@ -83,12 +86,15 @@ int poll_ioloop(int server_socket, struct Poller * poller_class, void * poller_i
         rc = poller_class->try_acceptfd(poller_inst, &client_sock);
         if (rc == -1) {
             perror("poll: poller_try_acceptfd:");
+        } else if(client_sock == -1) {
+            // no errors, but no sockets to accept
         } else {
             struct jobnode* job = jobpool_free_acquire();
             if (NULL == job) {
                 perror("poll: poller_try_acceptfd: job creation");
             } else {
                 job->sockfd = client_sock;
+                printf("Accepted: %d\n", client_sock);
                 jobpool_blocked_put(client_sock, job); // TODO: handle put fail case
             }
         }
@@ -101,12 +107,16 @@ int poll_ioloop(int server_socket, struct Poller * poller_class, void * poller_i
 
             struct jobnode * job = jobpool_blocked_get(fd_iterator);
             if (NULL == job) {
-                fprintf(stderr, "poll: illegal-stat:: Terminating server\n");
+                fprintf(stderr, "poll: illegal-state:: Terminating server sock=%d, state=%d\n", fd_iterator, sock_state);
                 // TODO: listen cleanup before exiting
                 return -1;
             }
-
+            
+            printf("job about to queue: %d, %p\n", fd_iterator, job);
+            // TODO TODO TODO TODO
+            // TODO: add shutdown case
             jobpool_active_enqueue(job);
+            printf("job queued: %d, %p\n", fd_iterator, job);
 
 #if 0            
             handler_state = process_fn(server_socket, fd_iterator);
@@ -136,9 +146,12 @@ int poll_ioloop(int server_socket, struct Poller * poller_class, void * poller_i
             if (NULL == job) {
                 continue;
             } else if (job->closed) {
+                printf("Freed: %d\n", sockfd);
                 poller_class->releasefd(poller_inst, sockfd);
                 jobpool_free_release(job);
-
+            } else {
+                // in case of nothing, need to put back the job
+                jobpool_blocked_put(sockfd, job); // TODO: check return
             }
         }
     }
@@ -362,6 +375,8 @@ int SelectPoller_iterator_getfd(void * this, sock_state_e * sock_state)
 {
     struct SelectPoller* self = this;
 
+    printf("Iterator-entry: %d, %d\n", self->iterator, self->fd_max_value);
+
     if (self->iterator > self->fd_max_value) {
         return -1;    
     }
@@ -372,6 +387,10 @@ int SelectPoller_iterator_getfd(void * this, sock_state_e * sock_state)
         self->iterator += 1;
         readable = FD_ISSET(self->iterator, &self->cached_read_fds);
         writeable = FD_ISSET(self->iterator, &self->cached_write_fds);
+        printf("Iterator-loop: %d, %d\n", self->iterator, self->fd_max_value);
+        if (self->iterator > self->fd_max_value) {
+            return -1;    
+        }
     }
 
     sock_state_e temp = SOCK_UNKNOWN;
@@ -381,6 +400,7 @@ int SelectPoller_iterator_getfd(void * this, sock_state_e * sock_state)
     *sock_state = temp;
     
     self->iterator += 1;    // increment the iterator for next step
+    printf("Iterator-exit: %d, %d\n", self->iterator, self->fd_max_value);
     return (self->iterator - 1); // return the last value before increment
 }
 

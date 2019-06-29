@@ -90,6 +90,7 @@ struct jobnode * jobpool_blocked_get(int sockfd) {
 
     struct jobnode * temp = _jobpool.blocking_map[sockfd];
     _jobpool.blocking_map[sockfd] = NULL;
+    printf("jobpool-get: %p @ %p\n", temp, &_jobpool.blocking_map[sockfd]);
 
     if (pthread_spin_unlock(&_jobpool.block) != 0) goto EXIT;
 
@@ -110,6 +111,7 @@ int jobpool_blocked_put(int sockfd, struct jobnode* job) {
     if (pthread_spin_lock(&_jobpool.block) != 0) goto EXIT;
 
     _jobpool.blocking_map[sockfd] = job;
+    printf("jobpool-put: %p @ %p\n", job, &_jobpool.blocking_map[sockfd]);
 
     if (pthread_spin_unlock(&_jobpool.block) != 0) goto EXIT;
 
@@ -185,9 +187,11 @@ void jobpool_active_enqueue(struct jobnode * job) {
     _jobpool.queue_count += 1;
 
     if (pthread_spin_unlock(&_jobpool.qlock) != 0) goto EXIT;
-    
+
+    return;
+
 EXIT:
-    // TODO: error prints
+    perror("jobpool: enqueue - spin lock/unlock failed");
     exit(1); // spinlock taking only fails in case of a dead lock, no recovery for that case
 }
 
