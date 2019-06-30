@@ -1,6 +1,10 @@
 // Job queue + Job pool
 // ===========================================================================
 
+// TODO: needs complete re-doing.
+// Understanding or error: The free and queue locks are different. However they can access one resource at the same time
+// the ->prev and -> next pointers as part of the jobnode. That is causing sync issues.
+
 
 #include "jobpool.h"
 
@@ -15,7 +19,8 @@
 struct jobpool {
     struct jobnode * free_pool;
     struct jobnode * * blocking_map;
-    struct jobnode * active_queue;
+    struct jobnode * active_queue_front;
+    struct jobnode * active_queue_rear;
     int free_count;
     int queue_count;
     int size;
@@ -25,7 +30,8 @@ struct jobpool {
 } _jobpool = {
     .free_pool = NULL, 
     .blocking_map = NULL, 
-    .active_queue = NULL, 
+    .active_queue_front = NULL, 
+    .active_queue_rear = NULL, 
     .free_count = 0, 
     .queue_count = 0, 
     .size = 0};
@@ -82,6 +88,25 @@ int jobpool_init(int size) {
 // WARN: SINGLE-THREADED USE ONLY
 struct jobnode * jobpool_blocked_get(int sockfd) {
     if (sockfd > _jobpool.size) { // TODO: Non thread safe access
+        return NULL;
+    }
+
+    if (pthread_spin_lock(&_jobpool.block) != 0) goto EXIT;
+
+    struct jobnode * temp = _jobpool.blocking_map[sockfd];
+
+    if (pthread_spin_unlock(&_jobpool.block) != 0) goto EXIT;
+
+    return temp;
+
+EXIT:
+    perror("jobpool: get - spin lock/unlock failed");
+    exit(1); // spinlock taking only fails in case of a dead lock, no recovery for that case
+    return NULL;
+}
+
+struct jobnode * jobpool_blocked_delete(int sockfd) {
+    if (sockfd > _jobpool.size) { // TODO: Non thread safe access
         fprintf(stderr, "jobpool: socket larger than map\n");
         exit(1); // TODO: serious unhandled case where sockfd exceeds MAX_CONNECTIONS
     }
@@ -90,14 +115,13 @@ struct jobnode * jobpool_blocked_get(int sockfd) {
 
     struct jobnode * temp = _jobpool.blocking_map[sockfd];
     _jobpool.blocking_map[sockfd] = NULL;
-    printf("jobpool-get: %p @ %p\n", temp, &_jobpool.blocking_map[sockfd]);
 
     if (pthread_spin_unlock(&_jobpool.block) != 0) goto EXIT;
 
     return temp;
 
 EXIT:
-    // TODO: error prints
+    perror("jobpool: delete - spin lock/unlock failed");
     exit(1); // spinlock taking only fails in case of a dead lock, no recovery for that case
     return NULL;
 }
@@ -111,14 +135,13 @@ int jobpool_blocked_put(int sockfd, struct jobnode* job) {
     if (pthread_spin_lock(&_jobpool.block) != 0) goto EXIT;
 
     _jobpool.blocking_map[sockfd] = job;
-    printf("jobpool-put: %p @ %p\n", job, &_jobpool.blocking_map[sockfd]);
 
     if (pthread_spin_unlock(&_jobpool.block) != 0) goto EXIT;
 
     return 0;
 
 EXIT:
-    // TODO: error prints
+    perror("jobpool: put - spin lock/unlock failed");
     exit(1); // spinlock taking only fails in case of a dead lock, no recovery for that case
 }
 
@@ -133,6 +156,9 @@ struct jobnode * jobpool_free_acquire(void) {
         temp = _jobpool.free_pool;
         _jobpool.free_pool = _jobpool.free_pool->next;
         _jobpool.free_count -= 1;
+    } else {
+        fprintf(stderr, "TODO: unhandler error of running out of free connections\n");
+        exit(1);
     }
 
     if (pthread_spin_unlock(&_jobpool.flock) != 0) goto EXIT;
@@ -140,7 +166,7 @@ struct jobnode * jobpool_free_acquire(void) {
     if (temp != NULL) {
         temp->sockfd = -1;
         temp->yielded = false;
-        temp->closed = false;
+        temp->state = JOB_UNINITED;
         temp->next = NULL;
         temp->prev = NULL;
     }
@@ -148,7 +174,7 @@ struct jobnode * jobpool_free_acquire(void) {
     return temp;
     
 EXIT:
-    // TODO: error prints
+    perror("jobpool: acquire - spin lock/unlock failed");
     exit(1); // spinlock taking only fails in case of a dead lock, no recovery for that case
     return NULL;
 }
@@ -163,27 +189,29 @@ void jobpool_free_release(struct jobnode* released) {
 
     if (pthread_spin_unlock(&_jobpool.flock) != 0) goto EXIT;
     
+    return;
+
 EXIT:
-    // TODO: error prints
+    perror("jobpool: release - spin lock/unlock failed");
     exit(1); // spinlock taking only fails in case of a dead lock, no recovery for that case
 }
 
 // enqueque new job
 void jobpool_active_enqueue(struct jobnode * job) {
 
+    job->next = NULL;
+
     if (pthread_spin_lock(&_jobpool.qlock) != 0) goto EXIT;
 
     if (_jobpool.queue_count > 0) {
-        job->next = _jobpool.active_queue;
-        job->prev = _jobpool.active_queue->prev;
-        _jobpool.active_queue->prev->next = job;
-        _jobpool.active_queue->prev = job;
+        _jobpool.active_queue_rear->next = job;
+        job->prev = _jobpool.active_queue_rear;
     } else {
-        job->next = job;
-        job->prev = job;
-        _jobpool.active_queue = job;
+        job->prev = NULL;
+        _jobpool.active_queue_front = job;        
     }
 
+    _jobpool.active_queue_rear = job;
     _jobpool.queue_count += 1;
 
     if (pthread_spin_unlock(&_jobpool.qlock) != 0) goto EXIT;
@@ -200,20 +228,25 @@ struct jobnode * jobpool_active_dequeue(void) {
 
     if (pthread_spin_lock(&_jobpool.qlock) != 0) goto EXIT;
 
-    if (_jobpool.queue_count > 0) {
-        temp =  _jobpool.active_queue;
-        _jobpool.active_queue->prev->next = temp->next;
-        _jobpool.active_queue->next->prev = temp->prev;
-        _jobpool.active_queue = temp->next;
+    temp = _jobpool.active_queue_front;
+    if (_jobpool.queue_count > 1) {
+        _jobpool.active_queue_front = temp->next;
+        _jobpool.active_queue_front->prev = NULL;
+        _jobpool.queue_count -= 1;
+        temp->next = NULL;
+    } else if (_jobpool.queue_count == 1) {
+        _jobpool.active_queue_front = NULL;
+        _jobpool.active_queue_rear = NULL;
+        _jobpool.queue_count -= 1;
+        temp->next = NULL;
     }
-    _jobpool.queue_count -= 1;
 
     if (pthread_spin_unlock(&_jobpool.qlock) != 0) goto EXIT;
 
     return temp;
     
 EXIT:
-    // TODO: error prints
+    perror("jobpool: dequeue - spin lock/unlock failed");
     exit(1); // spinlock taking only fails in case of a dead lock, no recovery for that case
 }
 

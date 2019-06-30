@@ -5,6 +5,7 @@
 
 #include <setjmp.h>
 // freestanding
+#include <stdatomic.h>
 #include <stdbool.h>
 
 
@@ -13,13 +14,22 @@ namespace c10m_job {
 #endif
 
 
+typedef enum job_state_enum {
+    JOB_UNINITED,
+    JOB_QUEUED,
+    JOB_BLOCKED,
+    JOB_DONE
+} job_state_e;
+
+
+
 // primitive types
 
 struct jobnode {
     int sockfd;
     struct jobnode * next;
     struct jobnode * prev;
-    bool closed;
+    _Atomic job_state_e state;
     bool yielded;
     sigjmp_buf buf;
 };
@@ -48,6 +58,8 @@ extern "C" {
 int jobpool_init(int size);
 
 struct jobnode * jobpool_blocked_get(int sockfd);
+
+struct jobnode * jobpool_blocked_delete(int sockfd);
 
 int jobpool_blocked_put(int sockfd, struct jobnode * node);
 

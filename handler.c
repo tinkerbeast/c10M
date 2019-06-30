@@ -115,12 +115,13 @@ static void * handler_process_uniprocess(void * param)
         handler_state_e state = handler_common_blockio(job->sockfd);
         switch(state) {
             case HANDLER_TRACK_CONNECTOR:
+                atomic_store(&job->state, JOB_BLOCKED);
                 ret = jobpool_blocked_put(job->sockfd, job);
                 break;
             case HANDLER_UNTRACK_CONNECTOR:
             case HANDLER_ERROR:
             default:
-                job->closed = true;
+                atomic_store(&job->state, JOB_DONE);
                 ret = jobpool_blocked_put(job->sockfd, job);
         }
 
@@ -137,6 +138,8 @@ handler_state_e handler_init_uniprocess(void)
 {
     int ret = -1;
 
+    printf("Uniprocess init\n");
+
     ret = handler_common_init(handler_process_uniprocess);
 
     return (ret == 0)? HANDLER_OK: HANDLER_ERROR;
@@ -144,6 +147,8 @@ handler_state_e handler_init_uniprocess(void)
 
 handler_state_e handler_deinit_uniprocess(void)
 {
+    printf("Uniprocess deinit\n");
+
     handler_run = false;
     return HANDLER_OK;
 }
@@ -206,7 +211,7 @@ static void * handler_process_fork(void * param)
         } else { // this is the parent process
             // since keepalive is done in process context,
             // no need to keep the client socket open here            
-            job->closed = true;
+            atomic_store(&job->state, JOB_DONE);
             jobpool_blocked_put(job->sockfd, job); // TODO: check return value
         }
     }
