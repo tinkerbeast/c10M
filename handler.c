@@ -105,30 +105,23 @@ static void * handler_process_uniprocess(void * param)
     
     while(handler_run) {
         // get a pending job
-        struct jobnode * job = jobpool_active_dequeue();
+        struct jobnode * job = jobq_active_dequeue();
         if (NULL == job) {
             usleep(10000); // TODO: change deprecated api
             continue;
         }
 
-        int ret = -1;
         handler_state_e state = handler_common_blockio(job->sockfd);
         switch(state) {
             case HANDLER_TRACK_CONNECTOR:
                 atomic_store(&job->state, JOB_BLOCKED);
-                ret = jobpool_blocked_put(job->sockfd, job);
                 break;
             case HANDLER_UNTRACK_CONNECTOR:
             case HANDLER_ERROR:
             default:
                 atomic_store(&job->state, JOB_DONE);
-                ret = jobpool_blocked_put(job->sockfd, job);
         }
 
-        if (ret != 0) {
-            fprintf(stderr, "handler: can't handle error\n");
-            exit(1);
-        }
     }
 
     return NULL;
@@ -191,7 +184,7 @@ static void * handler_process_fork(void * param)
 
     while(handler_run) {
         // get a pending job
-        struct jobnode * job = jobpool_active_dequeue();
+        struct jobnode * job = jobq_active_dequeue();
         if (NULL == job) {
             usleep(10000); // TODO: change deprecated api
             continue;
@@ -212,7 +205,6 @@ static void * handler_process_fork(void * param)
             // since keepalive is done in process context,
             // no need to keep the client socket open here            
             atomic_store(&job->state, JOB_DONE);
-            jobpool_blocked_put(job->sockfd, job); // TODO: check return value
         }
     }
 

@@ -44,7 +44,6 @@ static void poll_sigint_hook(void)
 
 
 
-
 int poll_ioloop(int server_socket, struct Poller * poller_class, void * poller_inst)
 {
 
@@ -69,7 +68,15 @@ int poll_ioloop(int server_socket, struct Poller * poller_class, void * poller_i
     poll_sigint_hook(); // TODO: add cleanup code
 
     // selectloop
+    //int lll = 0;
     while(poll_run) {
+        /*
+        printf("Loop: %d\n", lll);
+        if (lll > 3) {
+            sleep(1);
+        }
+        lll += 1;
+        */
 
         // Wait for event
         rc = poller_class->wait(poller_inst);
@@ -86,13 +93,12 @@ int poll_ioloop(int server_socket, struct Poller * poller_class, void * poller_i
         } else if(client_sock == -1) {
             // no errors, but no sockets to accept
         } else {
-            struct jobnode* job = jobpool_free_acquire();
+            struct jobnode* job = jobpool_free_acquire(client_sock); // DEVNOTE: socket set, job-state changed
             if (NULL == job) {
                 perror("poll: poller_try_acceptfd: job creation");
-            } else {
-                job->sockfd = client_sock;
+                close(client_sock); // TODO: check close return
+            } else {    
                 atomic_store(&job->state, JOB_BLOCKED); // Note: Atomic not really necessary
-                jobpool_blocked_put(client_sock, job); // TODO: handle put fail case
             }
         }
 
@@ -102,20 +108,27 @@ int poll_ioloop(int server_socket, struct Poller * poller_class, void * poller_i
         int fd_iterator = poller_class->iterator_getfd(poller_inst, &sock_state);
         while (fd_iterator > 0) {
 
-            struct jobnode * job = jobpool_blocked_get(fd_iterator);
-            if (NULL == job) {
-                fprintf(stderr, "poll: illegal-state:: Terminating server sock=%d, state=%d\n", fd_iterator, sock_state);
-                // TODO: listen cleanup before exiting
-                return -1;
-            }
-            
-            // TODO TODO TODO TODO
-            // TODO: add shutdown case
-            if (job->state == JOB_BLOCKED) {
+            //if (sock_state == SOCK_SHUTDOWN) {
+            if (0) {
+
                 // TODO TODO TODO TODO
-                // TODO: must remove job from select fds
-                jobpool_active_enqueue(job);
-                atomic_store(&job->state, JOB_QUEUED);
+                // TODO: add remote shutdown case based sock_state
+            } else {
+                struct jobnode * job = jobpool_get(fd_iterator);
+                if (NULL == job) {
+                    fprintf(stderr, "poll: illegal-state:: Terminating server sock=%d, state=%d\n", fd_iterator, sock_state);
+                    // TODO: listen cleanup before exiting
+                    return -1;
+                }
+                
+                //printf("Before enqueue state: %d\n", job->state);
+                job_state_e expected = JOB_BLOCKED;
+                if (atomic_compare_exchange_strong(&job->state, &expected, JOB_QUEUED)) {
+                    // TODO TODO TODO TODO
+                    // TODO: must remove job from select fds
+                    jobq_active_enqueue(job);
+                    //printf("enqueueq\n");
+                }
             }
 
 #if 0            
@@ -139,16 +152,18 @@ int poll_ioloop(int server_socket, struct Poller * poller_class, void * poller_i
             fd_iterator = poller_class->iterator_getfd(poller_inst, &sock_state);
         }
 
+        // TODO TODO TODO TODO
+        // TODO This is inefficient, we can just have a queue for cleanup
         // Cleanup all fds marked for cleanup
         int max_fd = poller_class->maxfd(poller_inst);
         for (int sockfd = server_socket; sockfd <= max_fd; sockfd++) {
-            struct jobnode * job = jobpool_blocked_get(sockfd);
+            job_state_e expected = JOB_DONE;
+            struct jobnode * job = jobpool_get(sockfd);
             if (NULL == job) {
                 continue;
-            } else if (job->state == JOB_DONE) {
+            } else if (atomic_compare_exchange_strong(&job->state, &expected, JOB_UNINITED)) {
                 poller_class->releasefd(poller_inst, sockfd);
-                jobpool_blocked_delete(sockfd); // TODO: check return
-                jobpool_free_release(job); // TODO: check return
+                jobpool_free_release(sockfd);
             }
         }
     }

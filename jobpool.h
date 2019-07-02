@@ -27,11 +27,12 @@ typedef enum job_state_enum {
 
 struct jobnode {
     int sockfd;
-    struct jobnode * next;
-    struct jobnode * prev;
-    _Atomic job_state_e state;
-    bool yielded;
-    sigjmp_buf buf;
+    struct jobnode * next;      // synchronised by jobpool qlock
+    struct jobnode * prev;      // synchronised by jobpool qlock
+    struct jobnode * nextfree;  // synchrnoised by jobpool flock
+    _Atomic job_state_e state;  // synchronised by atomicity
+    bool yielded;               // single threaded use only
+    sigjmp_buf buf;             // single threaded use only
 };
 
 
@@ -57,19 +58,23 @@ extern "C" {
 
 int jobpool_init(int size);
 
+#if 0
 struct jobnode * jobpool_blocked_get(int sockfd);
 
 struct jobnode * jobpool_blocked_delete(int sockfd);
 
 int jobpool_blocked_put(int sockfd, struct jobnode * node);
+#endif
 
-struct jobnode * jobpool_free_acquire(void);
+struct jobnode * jobpool_get(int sockfd);
 
-void jobpool_free_release(struct jobnode* released);
+struct jobnode * jobpool_free_acquire(int sockfd);
 
-void jobpool_active_enqueue(struct jobnode * job);
+void jobpool_free_release(int sockfd);
 
-struct jobnode * jobpool_active_dequeue(void);
+void jobq_active_enqueue(struct jobnode * job);
+
+struct jobnode * jobq_active_dequeue(void);
 
 
 #ifdef __cplusplus

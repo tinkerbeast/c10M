@@ -1,9 +1,6 @@
 // Job queue + Job pool
 // ===========================================================================
 
-// TODO: needs complete re-doing.
-// Understanding or error: The free and queue locks are different. However they can access one resource at the same time
-// the ->prev and -> next pointers as part of the jobnode. That is causing sync issues.
 
 
 #include "jobpool.h"
@@ -17,16 +14,15 @@
 
 
 struct jobpool {
-    struct jobnode * free_pool;
-    struct jobnode * * blocking_map;
-    struct jobnode * active_queue_front;
-    struct jobnode * active_queue_rear;
-    int free_count;
-    int queue_count;
-    int size;
+    struct jobnode * free_pool;         // flock
+    struct jobnode * * blocking_map;    // flock read, write ???
+    struct jobnode * active_queue_front;    // qlock
+    struct jobnode * active_queue_rear;     // qlock
+    int free_count;     // flock
+    int queue_count;    // qlock
+    int size;           // immutable
     pthread_spinlock_t flock; // DEVNOTE: Using spinlock since I don't want context switch in case of wait
     pthread_spinlock_t qlock; // DEVNOTE: Using spinlock since I don't want context switch in case of wait
-    pthread_spinlock_t block; // DEVNOTE: Using spinlock since I don't want context switch in case of wait
 } _jobpool = {
     .free_pool = NULL, 
     .blocking_map = NULL, 
@@ -38,7 +34,8 @@ struct jobpool {
 
 
 // TODO: counterpart destroy function
-int jobpool_init(int size) {
+int jobpool_init(int size)
+{
     struct jobnode * jobs = malloc(sizeof(struct jobnode) * size);
     if (NULL == jobs) { 
         perror("jobpool: malloc: allocating jobs");
@@ -53,7 +50,8 @@ int jobpool_init(int size) {
     }
 
     for (int i = 0; i < size - 1; i++) {
-        jobs[i].next = &jobs[i+1];
+        jobs[i].nextfree = &jobs[i+1];
+        jobs[i].state = JOB_UNINITED;
         _jobpool.blocking_map[i] = NULL;
     }
     jobs[size - 1].next = NULL;
@@ -81,10 +79,21 @@ int jobpool_init(int size) {
         return -1;
     }
 
-    // TODO: resource freeing for failure case
-    return pthread_spin_init(&_jobpool.block, PTHREAD_PROCESS_PRIVATE);
+    return 0;
 }
 
+
+struct jobnode * jobpool_get(int sockfd) {
+    if (sockfd > _jobpool.size) {
+        return NULL;
+    }
+
+    return _jobpool.blocking_map[sockfd];
+}
+
+
+
+#if 0
 // WARN: SINGLE-THREADED USE ONLY
 struct jobnode * jobpool_blocked_get(int sockfd) {
     if (sockfd > _jobpool.size) { // TODO: Non thread safe access
@@ -144,9 +153,11 @@ EXIT:
     perror("jobpool: put - spin lock/unlock failed");
     exit(1); // spinlock taking only fails in case of a dead lock, no recovery for that case
 }
+#endif
 
 
-struct jobnode * jobpool_free_acquire(void) {
+struct jobnode * jobpool_free_acquire(int sockfd)
+{
     
     struct jobnode * temp = NULL;
 
@@ -154,8 +165,10 @@ struct jobnode * jobpool_free_acquire(void) {
 
     if (_jobpool.free_count > 0) {
         temp = _jobpool.free_pool;
-        _jobpool.free_pool = _jobpool.free_pool->next;
+        _jobpool.free_pool = _jobpool.free_pool->nextfree;
         _jobpool.free_count -= 1;
+
+        _jobpool.blocking_map[sockfd] = temp;
     } else {
         fprintf(stderr, "TODO: unhandler error of running out of free connections\n");
         exit(1);
@@ -163,12 +176,14 @@ struct jobnode * jobpool_free_acquire(void) {
 
     if (pthread_spin_unlock(&_jobpool.flock) != 0) goto EXIT;
 
+    // DEVNOTE: Any object which just came out of the freepool should not need to be synchronise.
+    //          Synchronisation issues will only appear after first dequeueing.
     if (temp != NULL) {
-        temp->sockfd = -1;
+        temp->sockfd = sockfd;
         temp->yielded = false;
-        temp->state = JOB_UNINITED;
         temp->next = NULL;
         temp->prev = NULL;
+        temp->nextfree = NULL;
     }
 
     return temp;
@@ -179,13 +194,18 @@ EXIT:
     return NULL;
 }
 
-void jobpool_free_release(struct jobnode* released) {
+void jobpool_free_release(int sockfd)
+{
     
     if (pthread_spin_lock(&_jobpool.flock) != 0) goto EXIT;
+    
+    struct jobnode * released = _jobpool.blocking_map[sockfd];
 
-    released->next = _jobpool.free_pool;
+    released->nextfree = _jobpool.free_pool;
     _jobpool.free_pool = released;
     _jobpool.free_count += 1;
+
+    _jobpool.blocking_map[sockfd] = NULL;
 
     if (pthread_spin_unlock(&_jobpool.flock) != 0) goto EXIT;
     
@@ -197,7 +217,8 @@ EXIT:
 }
 
 // enqueque new job
-void jobpool_active_enqueue(struct jobnode * job) {
+void jobq_active_enqueue(struct jobnode * job)
+{
 
     job->next = NULL;
 
@@ -223,7 +244,8 @@ EXIT:
     exit(1); // spinlock taking only fails in case of a dead lock, no recovery for that case
 }
 
-struct jobnode * jobpool_active_dequeue(void) {
+struct jobnode * jobq_active_dequeue(void)
+{
     struct jobnode * temp = NULL;
 
     if (pthread_spin_lock(&_jobpool.qlock) != 0) goto EXIT;
@@ -253,44 +275,3 @@ EXIT:
 
 
 
-
-
-
-// Yield
-// ===========================================================================
-
-// TODO: else case does not handle error
-
-
-// Thread pool 
-// =========================================================================
-
-
-#if 0
-void * theadpool_routine(NULL)
-{
-    while (1) {
-        struct jobnode * ctx = jobpool_active_dequeue();
-        if (NULL == ctx) { // TODO: Find a better mechanism(possibly signal based that no jobs are available)            
-            usleep(10000); // TODO: replace usleep, since it's deprecated
-            continue;
-        }
-
-        int ret = plugin_function(ctx);
-        if (ret == CLOSE_CONNECTION) {
-            close(sockfd);
-            jobpool_free_release(ctx);
-        } else { // Maintain connection
-            jobpool_blocked_put(ctx);
-        }
-    }
-}
-
-
-
-void threadpool_init(int count) {
-    pthread_t thread_id;
-    s = pthread_create(&thread_id, NULL, &func_name, NULL);
-
-}
-#endif
