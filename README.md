@@ -5,8 +5,23 @@ Research into the c10M problem with respect to the Linux kernel.
 
 ### Step 1: Make and run
 
-	make clean
-	make
+    mkdir build
+    cd build
+    cmake ../
+	make clean 
+	make clean && make VERBOSE=1
+    gcc  -g   CMakeFiles/httpio-static.dir/src/main.c.o  -o httpio-static -pthread libhttpiolib-static.a
+
+#### Note on build failure
+
+Cmake uses the gcc command with -lpthread even for static build, which is causing the error. See https://stackoverflow.com/questions/23250863/difference-between-pthread-and-lpthread-while-compiling for differences.
+
+The problem with dynamic build is probably the function pointer in the structure being not initalised in the dynamic library. 
+
+TODO fix dynamic build.
+
+
+#### TODO: building with paramters
 
 Make can specify parameters. By default the parameters are taken from `conf.h`.
 
