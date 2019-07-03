@@ -60,8 +60,8 @@ void conf(void) {
         case PROCESS_FORK:
             handler = &handler_fork;
             break;
-        case PROCESS_PTHREAD:
-            handler = &handler_pthread;
+        case PROCESS_THREADPOOL:
+            handler = &handler_threadpool;
             break;
         default:
             fprintf(stderr, "conf: no matching process module\n");

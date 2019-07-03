@@ -20,7 +20,7 @@ typedef enum handler_state_enum {
 typedef enum handler_lifecycle_enum {
    PROCESS_UNIPROCESS,
    PROCESS_FORK,
-   PROCESS_PTHREAD
+   PROCESS_THREADPOOL
 } handler_lifecycle_e;
 
 
@@ -48,7 +48,7 @@ extern struct handler_lifecycle handler_uniprocess;
 
 extern struct handler_lifecycle handler_fork;
 
-extern struct handler_lifecycle handler_pthread;
+extern struct handler_lifecycle handler_threadpool;
 
 #ifdef __cplusplus
 }

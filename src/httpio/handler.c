@@ -1,3 +1,4 @@
+#define _GNU_SOURCE // needed for sched.h
 #include "handler.h"
 
 // local
@@ -8,12 +9,12 @@
 #include <stdlib.h> 
 // systems
 #include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <unistd.h>
 // freestanding
 #include <stdbool.h>
 #include <stddef.h>
-
 
 
 #define HANDLER_PARALLEL_LIMIT 4096
@@ -57,10 +58,11 @@ static handler_state_e handler_common_blockio(int connector_socket)
 }
 
 
-int handler_common_init(void *(*start_routine) (void *))
+int handler_common_init(void *(*start_routine) (void *), int affinity)
 {
     pthread_t thread;
     pthread_attr_t attr;
+    cpu_set_t cpuset;
     int ret;
 
     ret = pthread_attr_init(&attr);
@@ -74,6 +76,16 @@ int handler_common_init(void *(*start_routine) (void *))
         // TODO: free up attr
         perror("handler: common-init: detach");
         return -1;
+    }
+
+    if (affinity >= 0) {
+        CPU_ZERO(&cpuset);
+        CPU_SET(affinity, &cpuset);
+        ret = pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
+        if (ret != 0) {
+            perror("handler: common-init: affinity");
+            return -1;
+        }
     }
 
     ret = pthread_create(&thread, &attr, start_routine, NULL);
@@ -102,6 +114,8 @@ static sig_atomic_t handler_run = true;
 static void * handler_process_uniprocess(void * param)
 {
     (void)param;
+
+    printf("Started thread\n");
     
     while(handler_run) {
         // get a pending job
@@ -123,6 +137,8 @@ static void * handler_process_uniprocess(void * param)
         }
 
     }
+    
+    printf("Stopped thread\n");
 
     return NULL;
 }
@@ -133,7 +149,7 @@ handler_state_e handler_init_uniprocess(void)
 
     printf("Uniprocess init\n");
 
-    ret = handler_common_init(handler_process_uniprocess);
+    ret = handler_common_init(handler_process_uniprocess, -1);
 
     return (ret == 0)? HANDLER_OK: HANDLER_ERROR;
 }
@@ -145,25 +161,6 @@ handler_state_e handler_deinit_uniprocess(void)
     handler_run = false;
     return HANDLER_OK;
 }
-
-
-
-#if 0
-handler_state_e handler_process_uniprocess_blockio(int server_socket, int connector_socket)
-{
-    server_state_e state = SERVER_ERROR;
-
-    (void)server_socket;
-
-    state = handler_blockio(connector_socket);
-
-    if (state == SERVER_CLIENT_KEEPALIVE) {
-        return HANDLER_TRACK_CONNECTOR;
-    } else {
-        return HANDLER_UNTRACK_CONNECTOR;
-    }
-}
-#endif
 
 struct handler_lifecycle handler_uniprocess = {
     .init = handler_init_uniprocess,
@@ -215,7 +212,7 @@ handler_state_e handler_init_fork(void)
 {
     int ret = -1;
 
-    ret = handler_common_init(handler_process_fork);
+    ret = handler_common_init(handler_process_fork, -1);
 
     return (ret == 0)? HANDLER_OK: HANDLER_ERROR;
 }
@@ -225,30 +222,6 @@ handler_state_e handler_deinit_fork(void)
     handler_run = false;
     return HANDLER_OK;
 }
-
-#if 0
-int handler_process_fork_blockio(int server_socket, int connector_socket)
-{
-    server_state_e state = SERVER_ERROR;
-
-    signal(SIGCHLD, SIG_IGN); // TODO: Ignore sigchild in a better way
-
-    // TODO: warn: parallel limit is not enforced
-
-    if (!fork()) { // this is the child process
-        close(server_socket); // child doesn't need the server
-
-        // doesn't make sense for a process not to handle keep-alive
-        do {
-            state = handler_blockio(connector_socket);
-        } while(state == SERVER_CLIENT_KEEPALIVE); 
-
-        exit(EXIT_SUCCESS); // TODO: handle error conditions
-    }
-
-    return HANDLER_UNTRACK_CONNECTOR; // since keepalive is done in process context + blocking io
-}
-#endif
 
 struct handler_lifecycle handler_fork = {
     .init = handler_init_fork,
@@ -260,46 +233,35 @@ struct handler_lifecycle handler_fork = {
 /* ptthread */
 /******************************************************************************/
 
-#include <pthread.h>
-
-void* handler_process_pthread_worker(void* param) {
-
-    server_state_e state = SERVER_ERROR;
-    int connector_socket = *((int*)param);
-    free(param);
-
-    do {
-        state = handler_common_blockio(connector_socket);
-    } while(state == SERVER_CLIENT_KEEPALIVE); 
 
 
-    close(connector_socket);
-
-    return NULL;
-}
-
-handler_state_e handler_process_pthread_blockio(int server_socket, int connector_socket)
+handler_state_e handler_init_threadpool(void)
 {
 
-    pthread_t thread;    
-    void * param = NULL;
-    
-    (void)server_socket;
-    
-    param = malloc(sizeof(connector_socket) * 1); // TODO: check malloc return
-    *((int*)param) = connector_socket;
+    int ret = -1;
 
-    // TODO: warn: parallel limit is not enforced
+    // Get total available cores
+    long num_threads = sysconf(_SC_NPROCESSORS_ONLN); // get the number of cpus available
+    if (num_threads < 0) {
+        perror("Could not get the number of availble cores");
+        return HANDLER_ERROR;
+    }
+    num_threads = (num_threads > 1)? num_threads - 1: num_threads; // reserve one thread for the ioloop if possible
 
-    if (pthread_create(&thread, NULL, handler_process_pthread_worker, param)) {
-        perror("ERROR creating thread.");
+    // Creae thread pool
+    for (int i = 0; i < num_threads; i++) {
+        ret = handler_common_init(handler_process_uniprocess, -1);
+        if (ret != 0) {
+            return HANDLER_ERROR;
+        }    
     }
 
-    return HANDLER_UNTRACK_CONNECTOR; // since keepalive is done in thread context + blocking io
+    return HANDLER_OK;
 }
 
-struct handler_lifecycle handler_pthread = {
-    .init = handler_init_uniprocess,
+
+struct handler_lifecycle handler_threadpool = {
+    .init = handler_init_threadpool,
     .deinit = handler_deinit_uniprocess
 };
 
