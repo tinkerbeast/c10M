@@ -52,12 +52,9 @@ extern "C" {
 
 int poll_ioloop(int server_socket, struct Poller * poller_class, void * poller_inst);
 
+int ioloop_poller_get(ioloop_type_e type, struct Poller * pl);
 
 // externs
-
-extern struct Poller poller_accept;
-
-extern struct Poller poller_select;
 
 
 

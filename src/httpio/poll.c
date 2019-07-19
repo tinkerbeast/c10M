@@ -444,7 +444,32 @@ struct Poller poller_select = {
     .maxfd = SelectPoller_maxfd
 };
 
+int ioloop_poller_get(ioloop_type_e type, struct Poller * pl)
+{
+    if  (type == IOLOOP_ACCEPT) {
+        pl->init = AcceptPoller_init;
+        pl->deinit = AcceptPoller_deinit;
+        pl->wait = AcceptPoller_wait;
+        pl->try_acceptfd = AcceptPoller_try_acceptfd;
+        pl->iterator_reset = AcceptPoller_iterator_reset;
+        pl->iterator_getfd = AcceptPoller_iterator_getfd;
+        pl->releasefd = AcceptPoller_releasefd;
+        pl->maxfd =  AcceptPoller_maxfd;
+    } else if  (type == IOLOOP_SELECT) {
+        pl->init = SelectPoller_init;
+        pl->deinit = SelectPoller_deinit;
+        pl->wait = SelectPoller_wait;
+        pl->try_acceptfd = SelectPoller_try_acceptfd;
+        pl->iterator_reset = SelectPoller_iterator_reset;
+        pl->iterator_getfd = SelectPoller_iterator_getfd;
+        pl->releasefd = SelectPoller_releasefd;
+        pl->maxfd = SelectPoller_maxfd;
+    } else {
+        return -1;
+    }
 
+    return 0;
+}
 /***********************************************************************************/
 
 #if 0

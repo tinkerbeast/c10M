@@ -42,13 +42,10 @@ extern "C" {
 #endif
 // prototypes
 
+int handler_lifecycle_get(handler_lifecycle_e type, struct handler_lifecycle * hl);
+
 // externs
 
-extern struct handler_lifecycle handler_uniprocess;
-
-extern struct handler_lifecycle handler_fork;
-
-extern struct handler_lifecycle handler_threadpool;
 
 #ifdef __cplusplus
 }

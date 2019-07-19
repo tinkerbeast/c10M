@@ -93,7 +93,7 @@ function(my_add_dev_exec exec_name exec_file lib_list)
     foreach(lib_name ${lib_list})
         list(APPEND static_lib_list ${lib_name}-static)
     endforeach(lib_name)
-    add_executable(${exec_name}-static ${exec_file})
+    add_executable(${exec_name}-static EXCLUDE_FROM_ALL ${exec_file})
     target_link_libraries(${exec_name}-static ${DEV_DEPENDENCIES} ${static_lib_list})
 endfunction()
 

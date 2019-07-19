@@ -260,9 +260,21 @@ handler_state_e handler_init_threadpool(void)
 }
 
 
-struct handler_lifecycle handler_threadpool = {
-    .init = handler_init_threadpool,
-    .deinit = handler_deinit_uniprocess
-};
+int handler_lifecycle_get(handler_lifecycle_e type, struct handler_lifecycle * hl)
+{
+    if  (type == PROCESS_UNIPROCESS) {
+        hl->init = handler_init_uniprocess;
+        hl->deinit = handler_deinit_uniprocess;
+    } else if  (type == PROCESS_FORK) {
+        hl->init = handler_init_fork;
+        hl->deinit = handler_deinit_fork;
+    } else if  (type == PROCESS_THREADPOOL) {
+        hl->init = handler_init_threadpool;
+        hl->deinit = handler_deinit_uniprocess;
+    } else {
+        return -1;
+    }
 
+    return 0;
+}
 
