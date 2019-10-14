@@ -4,47 +4,55 @@
 #include <stdlib.h>
 #include <stdio.h>
 // local
-#include "poll.h"
-#include "handler.h"
-#include "jobpool.h"
-#include "tuple.h"
+#include "httpio/poll.h"
+#include "httpio/handler.h"
+#include "httpio/jobpool.h"
+#include "httpio/tuple.h"
 
-/* CONFIG */
-#include "conf.h"
+/* DEFAULT CONFIG */
+#ifndef TUPLE_TYPE
+#define TUPLE_TYPE TUPLE_INET
+#endif
+
+#ifndef IOLOOP_TYPE
+#define IOLOOP_TYPE IOLOOP_SELECT
+#endif
+
+#ifndef HANDLER_LIFECYCLE 
+#define HANDLER_LIFECYCLE PROCESS_THREADPOOL
+#endif
+
+#define TUPLE_NODE NULL
+#define TUPLE_SERVICE "8888"
 
 #define MAX_CON 10000
 
 
 /* CONFIG RESULT */
-static struct TupleClass *tuple = NULL;
-static struct handler_lifecycle *handler = NULL;
+static struct TupleClass tuple;
+static struct handler_lifecycle handler;
+static struct Poller ioloop_type;
 static void *ioloop_inst = NULL;
-static struct Poller *ioloop_type = NULL;
 
 
 void conf(void) {
 
+    int ret = -1;
+
     // Assign tuple type based on config
-    if (TUPLE_INET == TUPLE_TYPE) {
-        tuple = &tuple_inetsock;
-    } else {
+    ret = tuple_class_get(TUPLE_TYPE, &tuple);
+    if (ret != 0) {
         fprintf(stderr, "conf: no matching tuple module\n");
         exit(1);
     }
-    tuple->node = TUPLE_NODE;
-    tuple->service = TUPLE_SERVICE;
+    tuple.node = TUPLE_NODE;
+    tuple.service = TUPLE_SERVICE;
 
     // Assign ioloop based on config
-    switch (IOLOOP_TYPE) {
-        case IOLOOP_ACCEPT:            
-            ioloop_type = &poller_accept;
-            break;
-        case IOLOOP_SELECT:            
-            ioloop_type = &poller_select;
-            break;
-        default:
-            fprintf(stderr, "conf: no matching ioloop module\n");
-            exit(1);
+    ret = ioloop_poller_get(IOLOOP_TYPE, &ioloop_type);
+    if (ret != 0) {
+        fprintf(stderr, "conf: no matching ioloop module\n");
+        exit(1);
     }
     ioloop_inst = malloc(IOLOOP_INST_SIZE_MAX);
     if (ioloop_inst == NULL) {
@@ -53,19 +61,10 @@ void conf(void) {
     }
 
     // Assign process type based on config
-    switch (HANDLER_LIFECYCLE) {
-        case PROCESS_UNIPROCESS:
-            handler = &handler_uniprocess;
-            break;
-        case PROCESS_FORK:
-            handler = &handler_fork;
-            break;
-        case PROCESS_THREADPOOL:
-            handler = &handler_threadpool;
-            break;
-        default:
-            fprintf(stderr, "conf: no matching process module\n");
-            exit(1);
+    ret = handler_lifecycle_get(HANDLER_LIFECYCLE, &handler);
+    if (ret != 0) {
+        fprintf(stderr, "conf: no matching process module\n");
+        exit(1);
     }
 }    
 
@@ -80,7 +79,7 @@ int main(int argc, char* argv[])
 
   conf(); // TODO: elaborate
 
-  rc = tuple->create(&server_sock, tuple->node, tuple->service);
+  rc = tuple.create(&server_sock, tuple.node, tuple.service);
   if (rc != 0) {
     fprintf(stderr, "main: server-create failed");
     return EXIT_FAILURE;
@@ -92,13 +91,13 @@ int main(int argc, char* argv[])
     return EXIT_FAILURE;
   }
 
-  rc = handler->init();
+  rc = handler.init();
   if (rc != 0) {
     fprintf(stderr, "main: handler-create failed");
     return EXIT_FAILURE;
   }
 
-  rc = poll_ioloop(server_sock, ioloop_type, ioloop_inst);
+  rc = poll_ioloop(server_sock, &ioloop_type, ioloop_inst);
   if (rc != 0) {
     fprintf(stderr, "main: server-poll failed");
     return EXIT_FAILURE;
@@ -106,13 +105,13 @@ int main(int argc, char* argv[])
 
   printf("Exited ioloop cleanly\n");
   
-  rc = handler->deinit();
+  rc = handler.deinit();
   if (rc != 0) {
     fprintf(stderr, "main: handler-cleanup failed");
     return EXIT_FAILURE;
   }
 
-  rc = tuple->delete(server_sock);
+  rc = tuple.delete(server_sock);
   if (rc != 0) {
     fprintf(stderr, "main: server-delete failed");
     return EXIT_FAILURE;

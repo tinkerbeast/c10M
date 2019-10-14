@@ -21,7 +21,7 @@ enum TupleClassType {
 extern "C" {
 #endif
 
-struct TupleClass tuple_inetsock;
+int tuple_class_get(enum TupleClassType type, struct TupleClass* tc);
 
 #ifdef __cplusplus
 }

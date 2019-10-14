@@ -125,11 +125,18 @@ int tuple_inetsock_create(int *server_socket, const char *node, const char* serv
 
 int tuple_inetsock_delete(int server_socket)
 {
-  return close(server_socket);
+    return close(server_socket);
 }
 
 
-struct TupleClass tuple_inetsock = {
-    .create = tuple_inetsock_create,
-    .delete = tuple_inetsock_delete
-};
+int tuple_class_get(enum TupleClassType type, struct TupleClass* tc)
+{
+    if (type == TUPLE_INET) {
+        tc->create = tuple_inetsock_create;
+        tc->delete = tuple_inetsock_delete;
+    } else {
+        return -1;
+    }
+
+    return 0;
+}

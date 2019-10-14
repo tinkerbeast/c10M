@@ -9,10 +9,12 @@
 #include <string.h>
 // systems
 #include <signal.h>
+#include <sys/epoll.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
 // freestanding
+#include <stdlib.h>
 #include <sys/types.h>
 
 
@@ -163,6 +165,7 @@ int poll_ioloop(int server_socket, struct Poller * poller_class, void * poller_i
                 continue;
             } else if (atomic_compare_exchange_strong(&job->state, &expected, JOB_UNINITED)) {
                 poller_class->releasefd(poller_inst, sockfd);
+                close(sockfd); // TODO: check returns
                 jobpool_free_release(sockfd);
             }
         }
@@ -251,7 +254,6 @@ void AcceptPoller_releasefd(void * this, int fd)
 {
     struct AcceptPoller* self = this;
 
-    close(fd);
     if (fd == self->fd_max_value) {
         self->fd_max_value -= 1;
     }
@@ -390,7 +392,7 @@ int SelectPoller_iterator_getfd(void * this, sock_state_e * sock_state)
 
 
     if (self->iterator > self->fd_max_value) {
-        return -1;    
+        return -1; 
     }
 
     int readable = FD_ISSET(self->iterator, &self->cached_read_fds);
@@ -423,7 +425,6 @@ void SelectPoller_releasefd(void * this, int fd)
     if (self->fd_max_value == fd) {
         self->fd_max_value -= 1;
     }
-    close(fd);
 }
 
 int SelectPoller_maxfd(void * this)
@@ -445,7 +446,168 @@ struct Poller poller_select = {
 };
 
 
+/******************************************************************************/
+/* epoll */
+/******************************************************************************/
+
+struct EpollPoller { 
+    struct epoll_event * epoll_events;
+    uint32_t max_events;
+    uint32_t iterator_nfds;
+    uint32_t iterator_cur;
+    int epollfd;
+    int server_socket;
+};
+
+int EpollPoller_init(void * this, int server_socket, int max_connections)
+{
+    struct EpollPoller* self = this;
+
+    self->epoll_events = malloc(max_connections * sizeof(struct EpollPoller));
+    if (NULL == self->epoll_events) {
+        return -1;
+    }
+
+    self->max_events = max_connections;
+
+    self->epollfd = epoll_create(max_connections);
+    if (self->epollfd < 0) {
+        free(self->epoll_events);
+        return -1;
+    }
+
+    struct epoll_event ev;
+    ev.events = EPOLLIN;
+    ev.data.fd = server_socket;
+    if (epoll_ctl(self->epollfd, EPOLL_CTL_ADD, server_socket, &ev) == -1) {
+        return -1;
+    }
+    self->server_socket = server_socket;
+
+    return 0;
+}
+
+void EpollPoller_deinit(void * this)
+{
+    struct EpollPoller* self = this;
+
+    free(self->epoll_events);
+}
+
+int EpollPoller_wait(void * this)
+{
+    struct EpollPoller* self = this;
+
+    self->iterator_nfds = epoll_wait(self->epollfd, self->epoll_events, self->max_events, -1);
+    // TODO return check
+
+    return 0;
+}
+
+// TODO: for epoll this will called invariant of connection of server socket, need to optimize
+int EpollPoller_try_acceptfd(void * this, int * sockfd)
+{
+    struct EpollPoller* self = this;
+
+    struct sockaddr_storage connector_addr;
+    socklen_t connector_addr_size = sizeof(connector_addr);
+
+    int connector_socket = accept4(self->server_socket, (struct sockaddr *)&connector_addr, 
+                                    &connector_addr_size, SOCK_NONBLOCK);
+    if (connector_socket == -1) {
+        return -1;
+    } 
+
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+    if (epoll_ctl(self->epollfd, EPOLL_CTL_ADD, connector_socket, &ev) == -1) {
+        close(connector_socket); // TODO: check return of close
+        return -1;
+    }
+    
+    *sockfd = connector_socket;
+
+    return 0;
+}
+
+void EpollPoller_iterator_reset(void * this)
+{
+    struct EpollPoller* self = this;
+
+    self->iterator_cur = 0;
+}
+
+int EpollPoller_iterator_getfd(void * this, sock_state_e * sock_state)
+{
+    struct EpollPoller* self = this;
+
+    if (self->iterator_cur == self->server_socket) {
+        self->iterator_cur += 1;
+    }
+
+    if (self->iterator_cur >= self->iterator_nfds) {
+        return -1; 
+    }
+
+    struct epoll_event * event = &self->epoll_events[self->iterator_cur];
+    
+    sock_state_e temp = SOCK_UNKNOWN;
+    temp = (event->events & EPOLLIN) ? SOCK_READABLE : temp;
+    temp = (event->events & EPOLLOUT) ? SOCK_WRITABLE : temp;
+    temp = (event->events & EPOLLRDHUP) ? SOCK_SHUTDOWN : temp;
+    *sock_state = temp;
+
+    self->iterator_cur += 1;    // increment the iterator for next step
+    return event->data.fd; 
+}
+
+void EpollPoller_releasefd(void * this, int fd)
+{
+    struct EpollPoller* self = this;
+
+    if (epoll_ctl(self->epollfd, EPOLL_CTL_DEL, fd, NULL) == -1) {
+        // TODO print error properly
+        perror("Error when removing fd from control group");
+    }
+}
+
 /***********************************************************************************/
+
+int ioloop_poller_get(ioloop_type_e type, struct Poller * pl)
+{
+    if  (type == IOLOOP_ACCEPT) {
+        pl->init = AcceptPoller_init;
+        pl->deinit = AcceptPoller_deinit;
+        pl->wait = AcceptPoller_wait;
+        pl->try_acceptfd = AcceptPoller_try_acceptfd;
+        pl->iterator_reset = AcceptPoller_iterator_reset;
+        pl->iterator_getfd = AcceptPoller_iterator_getfd;
+        pl->releasefd = AcceptPoller_releasefd;
+        pl->maxfd =  AcceptPoller_maxfd;
+    } else if  (type == IOLOOP_SELECT) {
+        pl->init            = SelectPoller_init;
+        pl->deinit          = SelectPoller_deinit;
+        pl->wait            = SelectPoller_wait;
+        pl->try_acceptfd    = SelectPoller_try_acceptfd;
+        pl->iterator_reset  = SelectPoller_iterator_reset;
+        pl->iterator_getfd  = SelectPoller_iterator_getfd;
+        pl->releasefd       = SelectPoller_releasefd;
+        pl->maxfd           = SelectPoller_maxfd;
+    } else if  (type == IOLOOP_EPOLL) {
+        pl->init            = EpollPoller_init;
+        pl->deinit          = EpollPoller_deinit;
+        pl->wait            = EpollPoller_wait;
+        pl->try_acceptfd    = EpollPoller_try_acceptfd;
+        pl->iterator_reset  = EpollPoller_iterator_reset;
+        pl->iterator_getfd  = EpollPoller_iterator_getfd;
+        pl->releasefd       = EpollPoller_releasefd;
+        pl->maxfd           = EpollPoller_maxfd;
+    } else {
+        return -1;
+    }
+
+    return 0;
+}
 
 #if 0
 struct SigIoPoller {
