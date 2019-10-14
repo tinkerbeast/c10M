@@ -13,7 +13,7 @@ endif()
 
 # c and cpp version
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # compiler flags
@@ -24,6 +24,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-pedantic -Wall -Wextra -Wdocumentation -Weffc++ -Wshorten-64-to-32 -Wconversion)
 endif()
+
+# miscellaneous
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 
 # === Print build platform informations ======================================
@@ -93,8 +97,8 @@ function(my_add_dev_exec exec_name exec_file lib_list)
     foreach(lib_name ${lib_list})
         list(APPEND static_lib_list ${lib_name}-static)
     endforeach(lib_name)
-    add_executable(${exec_name}-static ${exec_file})
-    target_link_libraries(${exec_name}-static ${DEV_DEPENDENCIES} ${static_lib_list})
+    add_executable(${exec_name}-static EXCLUDE_FROM_ALL ${exec_file}) # TODO EXCLUDE_FROM_ALL is workaround to avoid static building for now
+    target_link_libraries(${exec_name}-static ${DEV_DEPENDENCIES} ${static_lib_list}) 
 endfunction()
 
 

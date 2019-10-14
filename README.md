@@ -8,8 +8,8 @@ Research into the c10M problem with respect to the Linux kernel.
     mkdir build
     cd build
     cmake ../
-	make clean 
-	make clean && make VERBOSE=1
+    make clean 
+    make clean && make VERBOSE=1
     gcc  -g   CMakeFiles/httpio-static.dir/src/main.c.o  -o httpio-static -pthread libhttpiolib-static.a
 
 #### Note on build failure
@@ -25,7 +25,7 @@ TODO fix dynamic build.
 
 Make can specify parameters. By default the parameters are taken from `conf.h`.
 
-	make CFLAGS=-D TUPLE_TYPE={} -D IOLOOP_TYPE={} -D HANDLER_LIFECYCLE={}
+    make CFLAGS=-D TUPLE_TYPE={} -D IOLOOP_TYPE={} -D HANDLER_LIFECYCLE={}
 
 The following parameters are possible:
 
@@ -35,11 +35,11 @@ The following parameters are possible:
 
 Invoke run via.
 
-	./httpio
+    ./httpio
 
 ### Run siege or ab on the server
 
-	siege -c64 -t10s -b http://localhost:8888/
+    siege -c64 -t10s -b http://localhost:8888/
 
     ab -c64 -t10 -r http://localhost:8888/
 
